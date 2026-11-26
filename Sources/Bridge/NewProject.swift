@@ -179,7 +179,7 @@ struct NewProjectForm: View {
                 }
                 Button("Create", action: create)
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
+                    .prominentButton()
                     .disabled(slug.isEmpty || isCreating)
             }
         }

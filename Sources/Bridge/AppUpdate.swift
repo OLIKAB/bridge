@@ -210,7 +210,7 @@ struct AppUpdateBar: View {
                         .buttonStyle(.link)
                     Button(release.archive == nil ? "Download" : "Update") { update.install(release) }
                         .controlSize(.small)
-                        .buttonStyle(.borderedProminent)
+                        .prominentButton()
                     IconButton(systemName: "xmark", help: "Skip this version") { update.skipped = release.version }
                 case .downloading, .installing:
                     ProgressView().controlSize(.mini)

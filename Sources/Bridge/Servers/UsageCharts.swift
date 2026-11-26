@@ -1,4 +1,5 @@
 import Charts
+import Shared
 import SwiftUI
 
 struct UsageSample: Identifiable {
@@ -234,13 +235,9 @@ struct UsageBreakdown: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Spacer()
-                Picker("", selection: $metric) {
-                    ForEach(Metric.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.small)
-                .fixedSize()
+                PanelSegments("Show", selection: $metric,
+                              segments: Metric.allCases.map { PanelSegment($0.rawValue, value: $0) })
+                    .controlSize(.small)
             }
 
             if slices.isEmpty {

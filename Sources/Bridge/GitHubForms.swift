@@ -65,14 +65,8 @@ struct PublishRepositoryForm: View {
                 Text("Publish repository").font(.headline)
                 Spacer()
                 if hosts.count > 1 {
-                    Picker("Publish to", selection: $hostID) {
-                        ForEach(hosts.map(\.id), id: \.self) { id in
-                            Text(hosts.first { $0.id == id }?.name ?? id).tag(id)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
+                    PanelSegments("Publish to", selection: $hostID,
+                                  segments: hosts.map { PanelSegment($0.name, value: $0.id) })
                 }
             }
             // A pane per host, so each keeps its own account (and what was typed is kept across a switch).
@@ -114,6 +108,7 @@ private struct PublishRepositoryPane: View {
                 Button("Cancel", action: dismiss).keyboardShortcut(.cancelAction)
                 Button("Publish", action: publish)
                     .keyboardShortcut(.defaultAction)
+                    .prominentButton()
                     .disabled(account.login == nil || slug.isEmpty || isPublishing)
             }
         }
@@ -205,14 +200,8 @@ struct CloneRepositoryForm: View {
             if !isPage {
                 Text("Clone repository").font(.headline)
             }
-            Picker("", selection: $source) {
-                ForEach(hosts.map(\.id), id: \.self) { id in
-                    Text(hosts.first { $0.id == id }?.name ?? id).tag(id)
-                }
-                Text("URL").tag(Self.urlSource)
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+            PanelSegments("Clone from", selection: $source, fills: true,
+                          segments: hosts.map { PanelSegment($0.name, value: $0.id) } + [PanelSegment("URL", value: Self.urlSource)])
 
             if let host {
                 HostedRepoList(store: store, account: HostAccount.shared(for: host), selected: $selected, focus: $focus, clone: clone)
@@ -254,7 +243,7 @@ struct CloneRepositoryForm: View {
                 }
                 Button("Clone", action: clone)
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
+                    .prominentButton()
                     .disabled(repository == nil)
             }
         }

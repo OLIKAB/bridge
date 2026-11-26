@@ -198,10 +198,10 @@ struct SetupCheckRows: View {
                     HStack {
                         TextField("Name", text: $name)
                             .focused($identityFocus, equals: "name")
-                            .panelField(compact: true)
+                            .panelField()
                         TextField("Email", text: $email)
                             .focused($identityFocus, equals: "email")
-                            .panelField(compact: true)
+                            .panelField()
                         Button("Save") {
                             Task { identityError = await check.saveIdentity(name: name, email: email) }
                         }

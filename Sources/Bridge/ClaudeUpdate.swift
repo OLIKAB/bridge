@@ -217,7 +217,7 @@ struct ClaudeUpdateBar: View {
                 } else if update.needsUpdate {
                     Button("Update to \(update.latest ?? "")") { update.update() }
                         .controlSize(.small)
-                        .buttonStyle(.borderedProminent)
+                        .prominentButton()
                 } else if update.isChecking {
                     ProgressView().controlSize(.mini)
                     Text("Checking…").foregroundStyle(.secondary)

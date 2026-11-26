@@ -56,7 +56,7 @@ struct RepoColorStripe: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .accessibilityLabel(repo.color.map { "Color: \($0.name)" } ?? "Choose a color")
-        .popover(isPresented: $showPalette, arrowEdge: .bottom) {
+        .panelPopover(isPresented: $showPalette, arrowEdge: .bottom) {
             RepoColorPalette(selection: repo.color) { color in
                 withAnimation(LeadingStar.slide) { repo.color = color }
                 showPalette = false

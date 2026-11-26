@@ -273,3 +273,15 @@ private struct PanelWindowReader: NSViewRepresentable {
         }
     }
 }
+
+extension View {
+    /// A popover whose buttons are glass, like the window it opens from (`glassButtons`): a popover
+    /// doesn't take its button style from the view it's anchored to. Here rather than in Shared: there,
+    /// inlined into Bridge in a release build, it referred to a SwiftUI symbol the linker can't reach.
+    func panelPopover<PopoverContent: View>(isPresented: Binding<Bool>, arrowEdge: Edge = .top,
+                                            @ViewBuilder content: @escaping () -> PopoverContent) -> some View {
+        popover(isPresented: isPresented, arrowEdge: arrowEdge) {
+            content().glassButtons()
+        }
+    }
+}

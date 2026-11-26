@@ -238,7 +238,7 @@ struct AgentLoginNotice: View {
                     loginStarted = .now
                     phase = .waiting
                 }
-                .buttonStyle(.bordered)
+                .glassButtons()
                 .controlSize(.small)
             case .waiting:
                 ProgressView().controlSize(.mini)
@@ -247,7 +247,7 @@ struct AgentLoginNotice: View {
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
                 Button("Try again", action: done)
-                    .buttonStyle(.bordered)
+                    .glassButtons()
                     .controlSize(.small)
             case .loggedIn:
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
@@ -352,7 +352,7 @@ private struct AgentModelNotice: View {
                     }
                 }
                 .menuStyle(.button)
-                .buttonStyle(.bordered)
+                .glassButtons()
                 .controlSize(.small)
                 .fixedSize()
                 IconButton(systemName: "xmark", help: "Dismiss") { AgentStatus.shared.dismissProblem() }

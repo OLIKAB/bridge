@@ -64,7 +64,7 @@ struct SetupPage: View {
             HStack {
                 Spacer()
                 Button("Done", action: done)
-                    .buttonStyle(.borderedProminent)
+                    .prominentButton()
                     .keyboardShortcut(.defaultAction)
             }
         }

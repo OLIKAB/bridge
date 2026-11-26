@@ -340,8 +340,8 @@ private struct CommitBox: View {
                     Text(title).frame(maxWidth: .infinity)
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
+            // The regular size, like the fields above it, so its corners match theirs.
+            .prominentButton()
             .keyboardShortcut(.return, modifiers: .command)
             .disabled(disabledReason != nil || repo.activity != nil)
         }

@@ -54,7 +54,7 @@ private struct ClaudeSessionRow: View {
         .contentShape(Rectangle())
         .onTapGesture { showDetail = true }
         .onHover { hovering = $0 }
-        .popover(isPresented: $showDetail, arrowEdge: .bottom) {
+        .panelPopover(isPresented: $showDetail, arrowEdge: .bottom) {
             ClaudeSessionDetail(session: session) { showDetail = false }
         }
         .contextMenu {
@@ -312,6 +312,7 @@ struct BackgroundClaudeForm: View {
                     if isStarting { ProgressView().controlSize(.small) } else { Text("Start") }
                 }
                 .keyboardShortcut(.defaultAction)
+                .prominentButton()
                 .disabled(trimmed.isEmpty || isStarting)
             }
         }

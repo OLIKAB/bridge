@@ -63,6 +63,7 @@ struct StartCommandEditor: View {
                 Button("Cancel", action: dismiss).keyboardShortcut(.cancelAction)
                 Button("Save", action: save)
                     .keyboardShortcut(.defaultAction)
+                    .prominentButton()
                     .disabled(trimmed.isEmpty)
             }
         }

@@ -240,7 +240,7 @@ private struct TopBar: View {
             // ⌘B like GitHub Desktop's branch list.
             BarButton(icon: "arrow.triangle.branch", spokenCaption: "Current branch", title: repo.currentBranch) { showBranches.toggle() }
                 .keyboardShortcut("b", modifiers: .command)
-                .popover(isPresented: $showBranches, arrowEdge: .bottom) {
+                .panelPopover(isPresented: $showBranches, arrowEdge: .bottom) {
                     BranchPicker(repo: repo) { showBranches = false }
                 }
             Divider()
@@ -407,7 +407,7 @@ private struct SyncButton: View {
                 BarButton(icon: "icloud.and.arrow.up", title: "Publish repository", showsChevron: false) {
                     showPublish = true
                 }
-                .popover(isPresented: $showPublish, arrowEdge: .bottom) {
+                .panelPopover(isPresented: $showPublish, arrowEdge: .bottom) {
                     PublishRepositoryForm(repo: repo) { showPublish = false }
                 }
             } else if repo.canPublish {
@@ -520,7 +520,7 @@ private struct RepoSidebar: View {
 
             TextField("Filter repositories", text: $filter)
                 .focused($filterFocused)
-                .panelField(compact: true)
+                .panelField()
                 // Esc clears the filter, as in a search field.
                 .onExitCommand { filter = "" }
                 .padding(.horizontal, 10)
@@ -571,12 +571,12 @@ private struct RepoSidebar: View {
             SidebarRow(repo: repo)
                 .groupRow(GroupDragItem(kind: .repo, key: repo.path), title: repo.displayName, in: section)
                 .tag(repo.path)
-                .popover(isPresented: Binding(get: { publishing == repo.path }, set: { if !$0 { publishing = nil } }), arrowEdge: .trailing) {
+                .panelPopover(isPresented: Binding(get: { publishing == repo.path }, set: { if !$0 { publishing = nil } }), arrowEdge: .trailing) {
                     PublishRepositoryForm(repo: repo) { publishing = nil }
                 }
                 // Its own view to anchor to: two popovers on one view don't both open reliably.
                 .background {
-                    Color.clear.popover(isPresented: Binding(get: { newGroupFor == repo.path }, set: { if !$0 { newGroupFor = nil } }), arrowEdge: .trailing) {
+                    Color.clear.panelPopover(isPresented: Binding(get: { newGroupFor == repo.path }, set: { if !$0 { newGroupFor = nil } }), arrowEdge: .trailing) {
                         GroupNameForm(title: "New group with \(repo.displayName)", action: "Create") { name in
                             groups.setGroup(name, ofRepo: repo.path)
                             newGroupFor = nil
@@ -881,25 +881,12 @@ private struct RepoView: View {
 
     /// The Changes/History switch. Without a History title it's down to icons (and the change count).
     private func tabPicker(changes: String, history: String?) -> some View {
-        Picker("", selection: $state.tab) {
-            if let history {
-                Text(verbatim: changes).tag(RepoTab.changes)
-                Text(verbatim: history).tag(RepoTab.history)
-            } else {
-                Group {
-                    if changes.isEmpty {
-                        Image(systemName: "pencil.line")
-                    } else {
-                        Label(changes, systemImage: "pencil.line").labelStyle(.titleAndIcon)
-                    }
-                }
-                .tag(RepoTab.changes)
-                Image(systemName: "clock").tag(RepoTab.history)
-            }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
+        PanelSegments("Show", selection: $state.tab, segments: history.map { history in
+            [PanelSegment(changes, value: RepoTab.changes), PanelSegment(history, value: RepoTab.history)]
+        } ?? [
+            PanelSegment(changes.isEmpty ? nil : changes, systemImage: "pencil.line", value: RepoTab.changes),
+            PanelSegment(nil, systemImage: "clock", value: RepoTab.history),
+        ])
     }
 }
 

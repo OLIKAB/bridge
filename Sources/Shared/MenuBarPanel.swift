@@ -50,15 +50,39 @@ public extension View {
 }
 
 public extension View {
-    /// Every text field, in the panels, their popovers and the main window: the system's rounded field,
-    /// large so it's as tall as the buttons beside it (`fieldRowButton`), with the system's focus ring.
-    /// A drawn field (fill, hairline, accent ring) was used while the apps were linked as for macOS 14
-    /// and got the old square fields; with the real SDK (`currentSDK` in Package.swift) the system's
-    /// own is the one that looks at home. `compact` for a field that stands in for a row's title while
-    /// renaming it, so the row keeps its height.
-    func panelField(compact: Bool = false) -> some View {
-        textFieldStyle(.roundedBorder)
-            .controlSize(compact ? .regular : .large)
+    /// Every text field, in the panels, their popovers and the main window: the system's rounded field
+    /// at the regular size, where it's exactly as tall as the buttons and switches beside it
+    /// (`fieldRowButton`, `PanelToggleBar`) and has the same corners. At the large size it was the odd
+    /// one out: since macOS 26 large buttons and segmented controls are capsules 26–28 pt tall, while
+    /// the field stays a 24 pt rounded rectangle.
+    ///
+    /// Focus shows as the field's hairline turning the accent color (`FieldFocus`) instead of the
+    /// system's focus ring, a thick glow outside the field that drew more attention than anything else
+    /// in a small panel and was cut off by the rows around it.
+    func panelField() -> some View {
+        modifier(FieldFocus())
+    }
+}
+
+/// The field's border in the accent color while it has focus, traced over the system's own hairline.
+/// Its own `@FocusState` follows the field's focus alongside any `.focused` the caller has put on it.
+private struct FieldFocus: ViewModifier {
+    @FocusState private var isFocused: Bool
+    @Environment(\.isEnabled) private var isEnabled
+
+    func body(content: Content) -> some View {
+        content
+            .textFieldStyle(.roundedBorder)
+            .controlSize(.regular)
+            .focusEffectDisabled()
+            .focused($isFocused)
+            .overlay {
+                if isFocused && isEnabled {
+                    RoundedRectangle(cornerRadius: PanelMetrics.fieldCornerRadius, style: .continuous)
+                        .strokeBorder(Color.accentColor.opacity(0.8), lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
+            }
     }
 }
 

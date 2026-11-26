@@ -72,11 +72,11 @@ private struct PanelToggleBody: View {
 
     var body: some View {
         let isOn = configuration.isOn
-        let shape = RoundedRectangle(cornerRadius: PanelMetrics.fieldCornerRadius - 2, style: .continuous)
+        let shape = RoundedRectangle(cornerRadius: PanelMetrics.fieldCornerRadius, style: .continuous)
         Button { configuration.isOn.toggle() } label: {
             configuration.label
                 .foregroundStyle(isOn ? AnyShapeStyle(.tint) : hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                .frame(width: 28, height: PanelMetrics.fieldHeight - 4)
+                .frame(width: 28, height: PanelMetrics.fieldHeight)
                 .background {
                     if isOn {
                         // The thumb: lighter than the tray, with a hairline and a soft shadow under it.
@@ -100,16 +100,16 @@ public extension ToggleStyle where Self == PanelToggleStyle {
     static var panel: PanelToggleStyle { PanelToggleStyle() }
 }
 
+/// The system's regular-size controls, measured on macOS 26 and 27, for what's drawn to match them.
 public enum PanelMetrics {
-    /// The height of a text field (`panelField`), and of every button, switch tray or icon that stands
-    /// in a line with one, so a field and its buttons line up top and bottom. System buttons are a few
-    /// points shorter than a field, which looked off beside one.
-    public static let fieldHeight: CGFloat = 28
-    /// The corner radius shared by a field and the buttons beside it.
-    public static let fieldCornerRadius: CGFloat = 8
-    /// How far in from a large system field's edge its text starts, for text laid over a field
+    /// How tall a regular text field (`panelField`) is, and the buttons and switches beside it.
+    public static let fieldHeight: CGFloat = 24
+    /// The corners of a regular text field and bordered button, for the focus border traced over a
+    /// field (`panelField`) and the main window's toolbar switches.
+    public static let fieldCornerRadius: CGFloat = 6
+    /// How far in from a regular field's edge its text starts, for text laid over a field
     /// (a placeholder that changes often, Claude writing).
-    public static let fieldTextInset: CGFloat = 8
+    public static let fieldTextInset: CGFloat = 6
 }
 
 public extension NSImage {
@@ -137,16 +137,32 @@ public extension NSImage {
 }
 
 public extension View {
-    /// A button in a line with a text field (Commit & Push, Send, Terminal): the system's bordered button
-    /// at the large size, which is as tall as a large text field (`panelField`); `prominent` for the
-    /// line's main action, in the accent or `tint`. Drawn buttons and fields were used before, made to
-    /// match each other; the system's own match each other already.
-    @ViewBuilder
+    /// A button in a line with a text field (Commit & Push, Send, Terminal): the system's glass button
+    /// at the regular size, as tall as the field (`panelField`) and with the same corners; `prominent`
+    /// for the line's main action, tinted in the accent or `tint` (`prominentButton`).
     func fieldRowButton(prominent: Bool = false, tint: Color? = nil) -> some View {
+        buttonStyle(FieldRowButtonStyle(prominent: prominent, tint: tint)).controlSize(.regular)
+    }
+}
+
+/// The system's button with its label at least a line of text tall: a button holding only a symbol
+/// is otherwise 2 pt shorter than one with text, and than the field beside it. A hidden line of text
+/// sets the height, so it follows the control size and the user's text size.
+private struct FieldRowButtonStyle: PrimitiveButtonStyle {
+    let prominent: Bool
+    let tint: Color?
+
+    func makeBody(configuration: Configuration) -> some View {
+        let button = Button(role: configuration.role, action: configuration.trigger) {
+            ZStack {
+                Text(verbatim: " ").hidden().frame(width: 0)
+                configuration.label
+            }
+        }
         if prominent {
-            buttonStyle(.borderedProminent).tint(tint).controlSize(.large)
+            button.prominentButton(tint: tint)
         } else {
-            buttonStyle(.bordered).controlSize(.large)
+            button.glassButtons()
         }
     }
 }
@@ -265,7 +281,7 @@ public final class ToggleSegments: NSSegmentedControl {
     }
 }
 
-private extension ControlSize {
+extension ControlSize {
     var appKit: NSControl.ControlSize {
         switch self {
         case .mini: .mini

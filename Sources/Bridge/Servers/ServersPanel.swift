@@ -246,7 +246,7 @@ extension View {
     /// The New group form for a server row, opened from its context menu's Group entry.
     func newServerGroupPopover(_ isPresented: Binding<Bool>, item: ServerItem, title: String) -> some View {
         background {
-            Color.clear.popover(isPresented: isPresented, arrowEdge: .bottom) {
+            Color.clear.panelPopover(isPresented: isPresented, arrowEdge: .bottom) {
                 GroupNameForm(title: "New group with \(title)", action: "Create") { name in
                     RepoGroups.shared.setGroup(name, ofServer: item.key, projectRoot: item.projectRoot)
                     isPresented.wrappedValue = false

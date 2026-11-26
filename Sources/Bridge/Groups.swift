@@ -339,7 +339,7 @@ struct GroupHeader<Summary: View, Menu: View>: View {
         .onTapGesture { groups.toggleCollapsed(section, in: tab) }
         .onHover { hovering = $0 }
         .groupDropTarget(section, kind: tab == .repos ? .repo : .server)
-        .popover(isPresented: $renaming, arrowEdge: .bottom) {
+        .panelPopover(isPresented: $renaming, arrowEdge: .bottom) {
             if let section {
                 GroupNameForm(title: "Rename group", initial: section, action: "Rename") { name in
                     groups.rename(section, to: name)
@@ -411,6 +411,7 @@ struct GroupNameForm: View {
                 Spacer()
                 Button(action, action: submit)
                     .keyboardShortcut(.defaultAction)
+                    .prominentButton()
                     .disabled(trimmed.isEmpty)
             }
         }

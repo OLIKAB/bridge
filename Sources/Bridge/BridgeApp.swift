@@ -10,6 +10,7 @@ struct BridgeApp: App {
     var body: some Scene {
         MenuBarExtra {
             BridgePanel(store: appDelegate.store, ports: appDelegate.ports)
+                .glassButtons()
         } label: {
             MenuBarLabel(store: appDelegate.store)
         }
@@ -131,7 +132,7 @@ final class MainWindow: NSObject, NSWindowDelegate {
             window.toolbarStyle = .unifiedCompact
             window.isReleasedWhenClosed = false
             window.contentMinSize = NSSize(width: MainLayout.minWidth, height: 520)
-            let host = NSHostingController(rootView: MainView(store: store))
+            let host = NSHostingController(rootView: MainView(store: store).glassButtons())
             // Otherwise the window shrinks to the content's minimum size.
             host.sizingOptions = []
             window.contentViewController = host

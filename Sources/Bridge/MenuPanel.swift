@@ -212,7 +212,7 @@ struct MenuPanel: View {
                         .multilineTextAlignment(.center)
                     HStack {
                         Button("New project…") { openPage(.newProject) }
-                            .buttonStyle(.borderedProminent)
+                            .prominentButton()
                         Button("Clone…") { openPage(.clone) }
                     }
                     HStack {
@@ -569,25 +569,25 @@ private struct RepoRow: View {
             // Anchored to the whole top line, which is as wide whatever its right side shows, so a
             // popover doesn't shift when the buttons take the badges' place. Here rather than on the
             // strip below, so they can open from the context menu before that strip exists.
-            .popover(isPresented: $showNotes, arrowEdge: .bottom) {
+            .panelPopover(isPresented: $showNotes, arrowEdge: .bottom) {
                     NotesView(repo: repo).frame(width: 340, height: 280)
                 }
-                .popover(isPresented: $showSkillPicker, arrowEdge: .bottom) {
+                .panelPopover(isPresented: $showSkillPicker, arrowEdge: .bottom) {
                     SkillPicker(repo: repo) { showSkillPicker = false }
                 }
-                .popover(isPresented: $showStartEditor, arrowEdge: .bottom) {
+                .panelPopover(isPresented: $showStartEditor, arrowEdge: .bottom) {
                     StartCommandEditor(repo: repo) { showStartEditor = false }
                 }
-                .popover(isPresented: $showBackgroundClaude, arrowEdge: .bottom) {
+                .panelPopover(isPresented: $showBackgroundClaude, arrowEdge: .bottom) {
                     BackgroundClaudeForm(repo: repo, prompt: store.pendingClaudePrompt) { showBackgroundClaude = false }
                 }
                 .background {
-                    Color.clear.popover(isPresented: $showPublish, arrowEdge: .bottom) {
+                    Color.clear.panelPopover(isPresented: $showPublish, arrowEdge: .bottom) {
                         PublishRepositoryForm(repo: repo) { showPublish = false }
                     }
                 }
                 .overlay {
-                    Color.clear.allowsHitTesting(false).popover(isPresented: $showNewGroup, arrowEdge: .bottom) {
+                    Color.clear.allowsHitTesting(false).panelPopover(isPresented: $showNewGroup, arrowEdge: .bottom) {
                         GroupNameForm(title: "New group with \(repo.displayName)", action: "Create") { name in
                             groups.setGroup(name, ofRepo: repo.path)
                             showNewGroup = false
@@ -659,7 +659,9 @@ private struct RepoRow: View {
                         .accessibilityHidden(true)
                     }
                 }
-                .revealsGently()
+                // Shown at once rather than with `revealsGently`: the field and the prominent button are
+                // drawn with the system's materials, which went black while their layer faded in and only
+                // took their real colors once it was fully opaque.
             }
         }
         // The same margin as a server row's. The color stripe is in the title (see `RepoColorStripe`).
@@ -880,11 +882,11 @@ private struct RepoRow: View {
                 // Where Push goes once it's published, so a local-only repository's next step is in the same spot.
                 if repo.remote == nil {
                     Button("Publish") { showPublish = true }
-                        .buttonStyle(.borderedProminent)
+                        .prominentButton()
                 }
                 if status.ahead > 0 || repo.canPublish {
                     Button(repo.canPublish ? "Publish" : "Push") { Task { await repo.push() } }
-                        .buttonStyle(.borderedProminent)
+                        .prominentButton()
                 }
             }
             if !repo.isMissing {
@@ -1244,9 +1246,9 @@ private struct ClaudeComposer: View {
             // Settings for how the agent and terminals open, in a tray of their own, set apart from the
             // terminal and send buttons beside them, which do something.
             PanelToggleBar(toggleItems)
-                .controlSize(.large)
+                .controlSize(.regular)
                 .fixedSize()
-            // Field, switches, terminal and send all at the large size, as tall as one another.
+            // Field, switches, terminal and send all at the regular size, as tall as one another.
             Button { DevWorkspace.openTerminal("/") } label: { Image(systemName: "terminal") }
                 .fieldRowButton()
                 .panelTooltip("Open \(agent.terminalName) in /")
@@ -1417,12 +1419,8 @@ private struct SkillPicker: View {
                 .panelField()
                 .padding(10)
             if available.contains(where: \.isProject) {
-                Picker("", selection: $projectOnly) {
-                    Text("All").tag(false)
-                    Text("This project").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
+                PanelSegments("Show", selection: $projectOnly, fills: true,
+                              segments: [PanelSegment("All", value: false), PanelSegment("This project", value: true)])
                 .padding(.horizontal, 10)
                 .padding(.bottom, 8)
             }
@@ -1501,12 +1499,12 @@ struct AddRepositoryMenu: View {
             Button("Add repository…", systemImage: "folder.badge.plus") { Task { notice = await store.addWithPanel() } }
             Button("Find repositories in folder…", systemImage: "magnifyingglass") { Task { notice = await store.scanWithPanel() } }
         }
-        .popover(isPresented: $showNewProject, arrowEdge: .bottom) {
+        .panelPopover(isPresented: $showNewProject, arrowEdge: .bottom) {
             NewProjectForm(store: store) { showNewProject = false }
         }
         // Its own view to anchor to: two popovers on one view don't both open reliably.
         .background {
-            Color.clear.popover(isPresented: $showClone, arrowEdge: .bottom) {
+            Color.clear.panelPopover(isPresented: $showClone, arrowEdge: .bottom) {
                 CloneRepositoryForm(store: store) { showClone = false }
             }
         }
@@ -1605,7 +1603,7 @@ struct ServerControls: View {
         } else {
             IconButton(systemName: "play.fill", help: "No web app found. Choose a start command or script…") { showEditor = true }
                 .opacity(0.45)
-                .popover(isPresented: $showEditor, arrowEdge: .bottom) {
+                .panelPopover(isPresented: $showEditor, arrowEdge: .bottom) {
                     StartCommandEditor(repo: repo) { showEditor = false }
                 }
         }
@@ -1623,7 +1621,7 @@ struct ServerControls: View {
                 if repo.startsInTerminal { DevWorkspace.runInTerminal(command, in: repo.path) } else { server.start(command) }
             }
             .contextMenu { Button("Start command…") { showEditor = true } }
-            .popover(isPresented: $showEditor, arrowEdge: .bottom) {
+            .panelPopover(isPresented: $showEditor, arrowEdge: .bottom) {
                 StartCommandEditor(repo: repo) { showEditor = false }
             }
         case .running, .stopping:
