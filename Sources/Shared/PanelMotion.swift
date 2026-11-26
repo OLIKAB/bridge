@@ -125,15 +125,34 @@ private struct SlideIn: ViewModifier {
     }
 }
 
+extension PanelMotion {
+    @MainActor private static var instantUntil = Date.distantPast
+
+    /// Content that appears in the next moment is there at once rather than fading in: a whole page or
+    /// tab built anew (Bridge switching tabs) isn't something a click opened, and every group and open
+    /// row in it fading in made the switch flicker.
+    @MainActor
+    public static func revealsInstantly() {
+        instantUntil = Date().addingTimeInterval(0.25)
+    }
+
+    @MainActor static var isRevealingInstantly: Bool {
+        Date() < instantUntil
+    }
+}
+
 private struct Reveal: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var shown = false
+    @State private var shown = PanelMotion.isRevealingInstantly
 
     func body(content: Content) -> some View {
         content
             .opacity(shown ? 1 : 0)
             .offset(y: shown || reduceMotion ? 0 : -4)
             // Only this view's own state changes in the transaction, so nothing around it is animated.
-            .onAppear { withAnimation(PanelMotion.reveal) { shown = true } }
+            .onAppear {
+                guard !shown else { return }
+                withAnimation(PanelMotion.reveal) { shown = true }
+            }
     }
 }

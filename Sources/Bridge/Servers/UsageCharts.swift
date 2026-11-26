@@ -125,6 +125,12 @@ struct UsageChart: View {
                 }
             }
             .frame(height: 38)
+            // One element saying the figure, not one per point: Charts makes every mark an accessibility
+            // element, and with a sample added every scan, SwiftUI rebuilt them all each time, a good
+            // part of the hitch every few seconds while the Servers tab was open.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(title)
+            .accessibilityValue(shown.map { format($0[keyPath: value]) } ?? "")
         }
         .padding(8)
         .panelBackground(.quinary)
@@ -272,6 +278,8 @@ struct UsageBreakdown: View {
                         }
                     }
                     .frame(width: 86, height: 86)
+                    // The legend beside it says the same in words (see `UsageChart` on chart accessibility).
+                    .accessibilityHidden(true)
 
                     VStack(alignment: .leading, spacing: 3) {
                         ForEach(slices) { slice in

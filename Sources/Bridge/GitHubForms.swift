@@ -131,12 +131,12 @@ private struct PublishRepositoryPane: View {
             LabeledContent("Name") {
                 TextField("Name", text: $name).labelsHidden().onSubmit(publish)
                     .focused($focus, equals: "name")
-                    .panelField(isFocused: focus == "name")
+                    .panelField()
             }
             LabeledContent("Description") {
                 TextField("Description", text: $description, prompt: Text("Optional")).labelsHidden().onSubmit(publish)
                     .focused($focus, equals: "description")
-                    .panelField(isFocused: focus == "description")
+                    .panelField()
             }
             if !account.organizations.isEmpty {
                 Picker("Owner", selection: $owner) {
@@ -221,7 +221,7 @@ struct CloneRepositoryForm: View {
                 TextField("https://github.com/owner/repo or owner/repo", text: $url)
                     .onSubmit(clone)
                     .focused($focus, equals: "url")
-                    .panelField(isFocused: focus == "url")
+                    .panelField()
             }
 
             LabeledContent("Into") {
@@ -357,12 +357,12 @@ private struct HostedRepoList: View {
             HStack(spacing: 6) {
                 TextField("Filter your repositories", text: $filter, prompt: Text("Filter, or double-click one to clone it"))
                     .focused(focus, equals: "filter")
-                    .panelField(isFocused: focus.wrappedValue == "filter")
+                    .panelField()
                 if account.isLoadingRepos {
                     ProgressView().controlSize(.small).frame(width: PanelMetrics.fieldHeight + 4, height: PanelMetrics.fieldHeight)
                 } else {
                     Button { account.loadRepos(force: true) } label: { Image(systemName: "arrow.clockwise") }
-                        .buttonStyle(.fieldRow(iconOnly: true))
+                        .fieldRowButton()
                         .panelTooltip("Reload the list")
                         .accessibilityLabel("Reload the list")
                 }

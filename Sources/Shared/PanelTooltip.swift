@@ -36,20 +36,45 @@ private struct PanelTooltipModifier: ViewModifier {
     }
 }
 
+/// `panelTooltip` for the parts of an AppKit control that have no SwiftUI view of their own to put it
+/// on, like the segments of a segmented control: the control reports the part under the pointer.
+@MainActor
+public final class PartTooltips {
+    private let id = UUID()
+    private let anchor = TooltipAnchor()
+    private var current: Int?
+
+    public init() {}
+
+    /// The part under the pointer (nil when it has left the control), its tooltip, and where it is.
+    public func hover(_ part: Int?, text: String, rect: CGRect, in view: NSView) {
+        guard part != current else { return }
+        // Hidden first, so the next part's tooltip comes at once, as between two icon buttons.
+        if current != nil { TooltipController.shared.hide(id) }
+        current = part
+        guard part != nil, !text.isEmpty else { return }
+        anchor.view = view
+        anchor.rect = rect
+        TooltipController.shared.schedule(id, text: text, over: anchor)
+    }
+}
+
 /// The AppKit view behind a control, to find where it is on screen.
 @MainActor
 private final class TooltipAnchor {
     weak var view: NSView?
+    /// A part of the view (a segment), for `PartTooltips`; the whole view otherwise.
+    var rect: CGRect?
 
     var screenRect: CGRect? {
         guard let view, let window = view.window, window.isVisible else { return nil }
-        return window.convertToScreen(view.convert(view.bounds, to: nil))
+        return window.convertToScreen(view.convert(rect ?? view.bounds, to: nil))
     }
 
     /// A row, a field or a block of text rather than a small control: its tooltip waits longer and
     /// shows by the pointer.
     var isLarge: Bool {
-        guard let size = view?.bounds.size else { return false }
+        guard let size = rect?.size ?? view?.bounds.size else { return false }
         return size.width > 160 || size.height > 34
     }
 }

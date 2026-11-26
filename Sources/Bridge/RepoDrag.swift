@@ -26,8 +26,8 @@ extension View {
     /// A repository row that can be dragged, by pressing and holding it, into another group (dropped on
     /// a row or header there) and to another place among the repositories the sorting puts beside it.
     /// `group` is the row's section, and `groupsShown` whether the list is in sections at all.
-    func repoDragRow(_ repo: Repository, group: String?, groupsShown: Bool, store: RepoStore, isDraggable: Bool) -> some View {
-        modifier(RepoDragRow(repo: repo, group: group, groupsShown: groupsShown, store: store, isDraggable: isDraggable))
+    func repoDragRow(_ repo: Repository, group: String?, groupsShown: Bool, store: RepoStore) -> some View {
+        modifier(RepoDragRow(repo: repo, group: group, groupsShown: groupsShown, store: store, rowState: ExpandedRepo.shared.row(repo.path)))
     }
 }
 
@@ -36,7 +36,10 @@ private struct RepoDragRow: ViewModifier {
     let group: String?
     let groupsShown: Bool
     let store: RepoStore
-    let isDraggable: Bool
+    /// Whether the row is open, which is when it can't be dragged; the row's own state rather than the
+    /// list's, so opening a row doesn't redraw the list (see `ExpandedRepo.Row`).
+    @ObservedObject var rowState: ExpandedRepo.Row
+    private var isDraggable: Bool { !rowState.isExpanded }
     @ObservedObject private var drag = RepoDrag.shared
     @ObservedObject private var groups = RepoGroups.shared
     @State private var height: CGFloat = 0

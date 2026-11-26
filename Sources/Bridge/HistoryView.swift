@@ -40,7 +40,7 @@ struct HistoryView: View {
                 TextField("Search commits", text: $query)
                     .onExitCommand { query = "" }
                     .focused($searchFocused)
-                    .panelField(isFocused: searchFocused, compact: true)
+                    .panelField(compact: true)
                     .padding(8)
                 Divider()
             }

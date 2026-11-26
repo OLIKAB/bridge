@@ -6,7 +6,8 @@ import SwiftUI
 struct ServersPanel: View {
     @ObservedObject var model: PortModel
     @ObservedObject private var groups = RepoGroups.shared
-    @ObservedObject private var expansion = ExpandedServer.shared
+    /// Not observed: each row watches its own part (`ExpandedServer.Row`).
+    private var expansion: ExpandedServer { .shared }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -19,19 +20,14 @@ struct ServersPanel: View {
                     if model.isRefreshingByHand {
                         ProgressView().controlSize(.small).frame(width: 24, height: 22)
                     }
-                    // An on/off switch, in the tray that sets switches apart from the buttons beside it.
-                    PanelToggleGroup {
-                        Toggle(isOn: $model.showAll) {
-                            Image(systemName: "eye")
-                        }
-                        .toggleStyle(.panel)
-                        .panelTooltip("System processes and apps")
-                        .accessibilityLabel("Show system processes and apps")
-                    }
-                    // As tall as the icon buttons beside it in layout, its tray reaching into the
-                    // header's margin: at its own height the tray made this line taller than the
-                    // Repos tab's, and the panel's content shifted between the tabs.
-                    .frame(height: 22)
+                    // An on/off switch, the same control as the Repos tab's switches beside its prompt.
+                    PanelToggleBar([PanelToggleItem(systemImage: "eye", name: "System processes and apps", isOn: $model.showAll)])
+                        .controlSize(.regular)
+                        .fixedSize()
+                        // As tall as the icon buttons beside it in layout, reaching into the header's
+                        // margin: taller, it made this line taller than the Repos tab's, and the panel's
+                        // content shifted between the tabs.
+                        .frame(height: 22)
                     PanelMenu("gearshape", help: "Settings") {
                         Button("Refresh") { model.refreshByHand() }
                             .keyboardShortcut("r", modifiers: .command)
@@ -57,8 +53,10 @@ struct ServersPanel: View {
             .padding(12)
             // ⌘R while the panel is open, as the menu item's shortcut only works with the menu open.
             .background {
-                Button("Refresh") { model.refreshByHand() }
-                    .keyboardShortcut("r", modifiers: .command)
+                TabShortcuts(tab: .servers) {
+                    Button("Refresh") { model.refreshByHand() }
+                        .keyboardShortcut("r", modifiers: .command)
+                }
                     .frame(width: 0, height: 0)
                     .opacity(0)
                     .accessibilityHidden(true)
@@ -132,8 +130,11 @@ struct ServersPanel: View {
                         }
                     }
                     .padding(.vertical, 6)
-                    .onChange(of: expansion.revealCount) {
-                        if let id = expansion.id { proxy.scrollTo(id, anchor: .center) }
+                    .onReceive(expansion.$revealCount.dropFirst()) { _ in
+                        // After the opened row is laid out, as `onChange` came.
+                        DispatchQueue.main.async {
+                            if let id = expansion.id { proxy.scrollTo(id, anchor: .center) }
+                        }
                     }
                     }
                 }
@@ -273,7 +274,28 @@ private struct ServerGroupMenu: View {
 @MainActor
 final class ExpandedServer: ObservableObject {
     static let shared = ExpandedServer()
-    @Published private(set) var id: String?
+    @Published private(set) var id: String? {
+        didSet {
+            guard id != oldValue else { return }
+            oldValue.map { row($0).isExpanded = false }
+            id.map { row($0).isExpanded = true }
+        }
+    }
+
+    /// One row's part of this, for the row to observe, as in the Repos tab (`ExpandedRepo.Row`): only
+    /// the row that opens and the one that folds redraw.
+    final class Row: ObservableObject {
+        @Published fileprivate(set) var isExpanded = false
+    }
+    private var rows: [String: Row] = [:]
+
+    func row(_ id: String) -> Row {
+        if let row = rows[id] { return row }
+        let row = Row()
+        row.isExpanded = self.id == id
+        rows[id] = row
+        return row
+    }
     /// Bumped to scroll to `id`, for a row opened from elsewhere (a process in Top consumers).
     @Published private(set) var revealCount = 0
 
@@ -293,8 +315,13 @@ final class ExpandedServer: ObservableObject {
 /// its start button in their place under the pointer, and how it starts behind a click.
 struct FavoriteRow: View {
     let favorite: Favorite
-    @ObservedObject var model: PortModel
-    @ObservedObject private var expansion = ExpandedServer.shared
+    /// Not observed, only used in actions: what the row shows from it comes as values (`isFavorite`,
+    /// `isBusy`), as in `ProcessRow`.
+    let model: PortModel
+    let isFavorite: Bool
+    let isBusy: Bool
+    @ObservedObject private var rowState: ExpandedServer.Row
+    private var expansion: ExpandedServer { .shared }
     @State private var hovering = false
     @State private var showNewGroup = false
     @State private var atLeadingEdge = false
@@ -305,12 +332,14 @@ struct FavoriteRow: View {
     init(favorite: Favorite, model: PortModel) {
         self.favorite = favorite
         self.model = model
+        isFavorite = model.isFavorite(favorite)
+        isBusy = model.busy.contains(favorite.key)
+        rowState = ExpandedServer.shared.row(ServerItem.favorite(favorite).id)
         _settled = State(initialValue: !model.justStopped(favorite))
     }
 
     private var id: String { ServerItem.favorite(favorite).id }
-    private var isExpanded: Bool { expansion.id == id }
-    private var isFavorite: Bool { model.isFavorite(favorite) }
+    private var isExpanded: Bool { rowState.isExpanded }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -384,7 +413,7 @@ struct FavoriteRow: View {
     /// As tall as the start button, so the row keeps its height when the button takes over on hover.
     private var trailing: some View {
         HStack(spacing: 2) {
-            if model.busy.contains(favorite.key) {
+            if isBusy {
                 ProgressView().controlSize(.small).frame(width: 24, height: 22)
             } else if hovering || isExpanded, favorite.launch != nil {
                 if !isFavorite {
@@ -434,8 +463,16 @@ struct FavoriteRow: View {
 /// the rest behind a click. System processes are dimmed, so the dev servers stand out.
 struct ProcessRow: View {
     let process: ListeningProcess
-    @ObservedObject var model: PortModel
-    @ObservedObject private var expansion = ExpandedServer.shared
+    /// Not observed, only used in actions. A row that observed the model was redrawn, every row of it,
+    /// on every scan (a few seconds apart, with new CPU figures for some process) and whenever any
+    /// server was busy; as values, only the rows whose server changed redraw.
+    let model: PortModel
+    let isFavorite: Bool
+    let isBusy: Bool
+    let runsInBackground: Bool
+    /// Whether this row is open (see `ExpandedServer.Row`).
+    @ObservedObject private var rowState: ExpandedServer.Row
+    private var expansion: ExpandedServer { .shared }
     @State private var hovering = false
     @State private var showNewGroup = false
     @State private var atLeadingEdge = false
@@ -446,11 +483,14 @@ struct ProcessRow: View {
     init(process: ListeningProcess, model: PortModel) {
         self.process = process
         self.model = model
+        isFavorite = model.isFavorite(process)
+        isBusy = model.busy.contains(process.id)
+        runsInBackground = model.runInBackground
+        rowState = ExpandedServer.shared.row(process.id)
         _glow = State(initialValue: model.justStartedListening(process) ? 1 : 0)
     }
 
-    private var isExpanded: Bool { expansion.id == process.id }
-    private var isBusy: Bool { model.busy.contains(process.id) }
+    private var isExpanded: Bool { rowState.isExpanded }
     /// Without a container, a Docker row is Docker Desktop's own backend, which runs every container.
     private var canStop: Bool { !(process.framework == .docker && process.container == nil) }
     private var canRestart: Bool { !process.isSystem && canStop }
@@ -519,7 +559,7 @@ struct ProcessRow: View {
                 Button("Show log") { NSWorkspace.shared.open(Restarter.logFile(title: process.title)) }
             }
             if canRestart || canStop { Divider() }
-            Button(model.isFavorite(process) ? "Remove from favorites" : "Add to favorites") { model.toggleFavorite(process) }
+            Button(isFavorite ? "Remove from favorites" : "Add to favorites") { model.toggleFavorite(process) }
             ServerGroupMenu(item: .process(process), showNewGroup: $showNewGroup)
             if let root = process.projectRoot, root != "/" {
                 Divider()
@@ -533,7 +573,7 @@ struct ProcessRow: View {
 
     private var title: some View {
         HStack(spacing: 0) {
-            LeadingStar(isFavorite: model.isFavorite(process), isShown: atLeadingEdge) {
+            LeadingStar(isFavorite: isFavorite, isShown: atLeadingEdge) {
                 model.toggleFavorite(process)
             }
             HStack(spacing: 6) {
@@ -654,7 +694,7 @@ struct ProcessRow: View {
     private var restartHelp: String {
         if process.container != nil { return "Restart with docker restart" }
         if process.isDatabase { return "Restart with brew services" }
-        return model.runInBackground ? "Restart in the background" : "Restart – opens in a new terminal window"
+        return runsInBackground ? "Restart in the background" : "Restart – opens in a new terminal window"
     }
 }
 
@@ -662,7 +702,8 @@ struct ProcessRow: View {
 /// Dock menu). Its own view, so only the hovered row's button watches ⌥, not every row.
 private struct StopButton: View {
     let process: ListeningProcess
-    @ObservedObject var model: PortModel
+    /// Only used when clicked (see `ProcessRow.model`).
+    let model: PortModel
     @ObservedObject private var keys = ModifierKeys.shared
 
     var body: some View {

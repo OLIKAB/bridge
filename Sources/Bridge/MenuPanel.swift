@@ -6,8 +6,12 @@ import SwiftUI
 struct MenuPanel: View {
     @ObservedObject var store: RepoStore
     @ObservedObject private var groups = RepoGroups.shared
-    @ObservedObject private var expansion = ExpandedRepo.shared
+    /// Not observed: each row watches its own part (`ExpandedRepo.Row`), and the list only reacts to
+    /// changes (`onReceive`), so opening a row doesn't go over the whole list.
+    private var expansion: ExpandedRepo { .shared }
     @ObservedObject private var agent = AgentStatus.shared
+    /// For each row's sessions, handed to it as values (see `RepoRow.isExpanded`).
+    @ObservedObject private var claude = BackgroundClaude.shared
     @State private var notice: String?
     @State private var showNewProject = false
     @State private var showClone = false
@@ -80,6 +84,12 @@ struct MenuPanel: View {
             // The prompt is the panel's only text field, so typing goes straight into it.
             if page == nil && expansion.path == nil { promptFocused = true }
         }
+        // Back from the Servers tab, which keeps this one built but hidden and takes the keyboard from
+        // it: typing goes to the prompt again, as when the panel opens.
+        .onReceive(PanelState.shared.$tab.dropFirst()) { tab in
+            guard tab == .repos, page == nil, expansion.path == nil else { return }
+            DispatchQueue.main.async { promptFocused = true }
+        }
         .onReceive(PanelState.shared.$requestedPage) { requested in
             guard let requested else { return }
             PanelState.shared.requestedPage = nil
@@ -87,7 +97,8 @@ struct MenuPanel: View {
         }
         // A row folded away (Esc in its commit field, or its top line clicked) hands the keyboard back
         // to the prompt, where the arrow keys and Return work.
-        .onChange(of: expansion.path) { _, path in
+        // Received rather than observed (see `ExpandedRepo.Row`); the publisher sends the new value.
+        .onReceive(expansion.$path.dropFirst().removeDuplicates()) { path in
             if path == nil { promptFocused = true }
         }
     }
@@ -130,7 +141,7 @@ struct MenuPanel: View {
             .background {
                 // The shortcuts a Mac user tries first in a window like this. The panel has no menu bar
                 // of its own, so invisible buttons carry them.
-                Group {
+                TabShortcuts(tab: .repos) {
                     Button("Fetch all") { Task { await store.fetchAll(quietly: false) } }
                         .keyboardShortcut("r", modifiers: .command)
                     Button("New project") { openPage(.newProject) }
@@ -149,8 +160,7 @@ struct MenuPanel: View {
                     isFocused: $promptFocused,
                     moveSelection: { expansion.moveSelection(by: $0, in: shownRepos.map(\.path)) },
                     submitSelection: submitSelection,
-                    escape: escape,
-                    selectedRepo: expansion.selected ?? expansion.path
+                    escape: escape
                 )
                 .padding(.horizontal, 12)
                 .padding(.bottom, 10)
@@ -252,11 +262,12 @@ struct MenuPanel: View {
                                     if repo.id != section.items.first?.id {
                                         PanelDivider(subtle: true)
                                     }
-                                    RepoRow(repo: repo, store: store, options: rowOptions)
+                                    RepoRow(repo: repo, store: store, options: rowOptions,
+                                            sessions: claude.sessions(in: repo.path),
+                                            isStartingSession: claude.isStarting(in: repo.path))
                                         // Press and hold to drag it into another group, or to another
                                         // place among its color (see `RepoStore.reorderBlocker`).
-                                        .repoDragRow(repo, group: section.name, groupsShown: !section.isOnly, store: store,
-                                                     isDraggable: expansion.path != repo.path)
+                                        .repoDragRow(repo, group: section.name, groupsShown: !section.isOnly, store: store)
                                         .id(repo.path)
                                 }
                                 }
@@ -265,7 +276,7 @@ struct MenuPanel: View {
                         }
                     }
                     .padding(.vertical, 6)
-                    .onChange(of: expansion.selected) { _, selected in
+                    .onReceive(expansion.$selected.removeDuplicates()) { selected in
                         if let selected { proxy.scrollTo(selected) }
                     }
                     // Where the panel opens (see `onAppear`), once the list is there to scroll.
@@ -407,11 +418,41 @@ private struct RepoGroupHeader: View {
 @MainActor
 final class ExpandedRepo: ObservableObject {
     static let shared = ExpandedRepo()
-    @Published private(set) var path: String?
+    @Published private(set) var path: String? {
+        didSet {
+            guard path != oldValue else { return }
+            oldValue.map { row($0).isExpanded = false }
+            path.map { row($0).isExpanded = true }
+        }
+    }
 
     /// The row picked with ↑/↓ from the prompt field, so the list can be used from the keyboard the way
     /// a list in a Spotlight-like panel is: arrows to pick, Return to act, Esc to back out.
-    @Published var selected: String?
+    @Published var selected: String? {
+        didSet {
+            guard selected != oldValue else { return }
+            oldValue.map { row($0).isSelected = false }
+            selected.map { row($0).isSelected = true }
+        }
+    }
+
+    /// One row's part of this, for the row to observe. Only the rows that open, fold or are picked
+    /// then redraw: with the list (or every row) observing this whole object, a click on one row had
+    /// SwiftUI go over the entire list, 60–90 ms.
+    final class Row: ObservableObject {
+        @Published fileprivate(set) var isExpanded = false
+        @Published fileprivate(set) var isSelected = false
+    }
+    private var rows: [String: Row] = [:]
+
+    func row(_ path: String) -> Row {
+        if let row = rows[path] { return row }
+        let row = Row()
+        row.isExpanded = self.path == path
+        row.isSelected = selected == path
+        rows[path] = row
+        return row
+    }
 
     func toggle(_ path: String) {
         self.path = self.path == path ? nil : path
@@ -443,8 +484,19 @@ private struct RepoRow: View {
     /// Not observed (see `RepoRowOptions`); only read in actions, when they run.
     let store: RepoStore
     let options: RepoRowOptions
-    @ObservedObject private var groups = RepoGroups.shared
-    @ObservedObject private var expansion = ExpandedRepo.shared
+    /// Whether this row is open or picked: its own part of `ExpandedRepo`, so opening a row redraws it
+    /// and the one that folds, not the list. The background sessions are handed down as values, and
+    /// only the commit button watches ⌥ (`CommitLabel`): every row observing those redrew them all
+    /// whenever any session changed or a modifier key was pressed.
+    @ObservedObject var rowState: ExpandedRepo.Row
+    private var isExpanded: Bool { rowState.isExpanded }
+    private var isSelected: Bool { rowState.isSelected }
+    /// This repository's background sessions, and whether one is starting.
+    let sessions: [ClaudeSession]
+    let isStartingSession: Bool
+    private var groups: RepoGroups { .shared }
+    private var expansion: ExpandedRepo { .shared }
+    private var claude: BackgroundClaude { .shared }
     @State private var showNewGroup = false
     /// Counts copies made from the row, for the "Copied" confirmation on it.
     @State private var copied = 0
@@ -461,18 +513,16 @@ private struct RepoRow: View {
     @State private var showBackgroundClaude = false
     @State private var showPublish = false
     @FocusState private var commitFocused: Bool
-    @ObservedObject private var keys = ModifierKeys.shared
-    @ObservedObject private var claude = BackgroundClaude.shared
 
-    init(repo: Repository, store: RepoStore, options: RepoRowOptions) {
+    init(repo: Repository, store: RepoStore, options: RepoRowOptions, sessions: [ClaudeSession], isStartingSession: Bool) {
         self.repo = repo
         server = repo.server
         self.store = store
         self.options = options
+        rowState = ExpandedRepo.shared.row(repo.path)
+        self.sessions = sessions
+        self.isStartingSession = isStartingSession
     }
-
-    private var isExpanded: Bool { expansion.path == repo.path }
-    private var isSelected: Bool { expansion.selected == repo.path }
 
     /// A click opens or folds the row. A double-click is two clicks, so the second puts the row back as
     /// it was, and opens the repository in the Bridge window, as a double-click opens an item elsewhere.
@@ -482,7 +532,6 @@ private struct RepoRow: View {
             MainWindow.shared.show(store, selecting: repo)
         }
     }
-    private var sessions: [ClaudeSession] { claude.sessions(in: repo.path) }
 
     /// Whether one of the row's popovers is open: the row then stays as it is under the pointer, buttons
     /// and highlight, so nothing moves while the popover points at it.
@@ -581,7 +630,7 @@ private struct RepoRow: View {
                         // Esc folds the row away again, as it closes other things being typed into.
                         .onExitCommand { expansion.toggle(repo.path) }
                         .claudeWrites(isEmpty: message.isEmpty, isWriting: isSuggesting, action: suggest)
-                        .panelField(isFocused: commitFocused)
+                        .panelField()
                         // What was written before the row folded away, or was rebuilt, comes back.
                         .onAppear {
                             if message.isEmpty {
@@ -591,8 +640,7 @@ private struct RepoRow: View {
                         }
                         .onChange(of: message) { _, new in repo.commitDraft = new }
                     Button { commit(andPush: pushes) } label: { commitLabel }
-                        .buttonStyle(.fieldRow(prominent: true))
-                        .accessibilityLabel(pushes ? "Commit & Push" : "Commit")
+                        .fieldRowButton(prominent: true)
                         .disabled(!hasMessage)
                 }
                 .disabled(repo.activity != nil)
@@ -735,8 +783,7 @@ private struct RepoRow: View {
 
     /// One mark for the repository's background Claude sessions, the one that needs you most.
     @ViewBuilder private var sessionBadge: some View {
-        let sessions = sessions
-        if claude.isStarting(in: repo.path) {
+        if isStartingSession {
             ProgressView().controlSize(.mini)
         } else if sessions.contains(where: { $0.state == .blocked }) {
             Image(systemName: "questionmark.bubble.fill").foregroundStyle(.orange)
@@ -843,7 +890,7 @@ private struct RepoRow: View {
             if !repo.isMissing {
                 // No star here: it sits by the name (see `title`).
                 ServerControls(repo: repo)
-                if claude.isStarting(in: repo.path) {
+                if isStartingSession {
                     // The first `claude --bg` can take a while to start Claude Code's service; without this nothing seems to happen.
                     ProgressView().controlSize(.small).frame(width: 24, height: 22)
                 } else if options.agent.isInstalled {
@@ -878,21 +925,12 @@ private struct RepoRow: View {
 
     private var hasMessage: Bool { !message.trimmingCharacters(in: .whitespaces).isEmpty }
 
-    /// Commit & Push unless ⌥ is held or there's nowhere to push.
-    private var pushes: Bool { repo.remote != nil && !keys.option }
+    /// Commit & Push unless ⌥ is held or there's nowhere to push. Read when committing; the button's
+    /// label follows ⌥ by itself (`CommitLabel`), so the row isn't redrawn on every modifier key.
+    private var pushes: Bool { repo.remote != nil && !ModifierKeys.shared.option }
 
-    /// "Commit & Push", crossfading to "Commit" while ⌥ is held. Both are laid out, so the button keeps
-    /// the wider one's width and nothing beside it moves; only the words fade.
-    @ViewBuilder private var commitLabel: some View {
-        if repo.remote == nil {
-            Text("Commit")
-        } else {
-            ZStack {
-                Text("Commit & Push").opacity(pushes ? 1 : 0)
-                Text("Commit").opacity(pushes ? 0 : 1)
-            }
-            .animation(.easeInOut(duration: 0.18), value: pushes)
-        }
+    private var commitLabel: some View {
+        CommitLabel(canPush: repo.remote != nil)
     }
 
     private func suggest() {
@@ -908,7 +946,7 @@ private struct RepoRow: View {
         if background { help += "\n⌥-click to run it in the background instead" }
         return IconButton(image: Agent.current.logo, help: help, hoverTint: Agent.current.tint, isHighlighted: options.hasPrompt,
                           badge: options.withChrome ? Logo.chrome : nil) {
-            if keys.option && background {
+            if ModifierKeys.shared.option && background {
                 // With a prompt typed at the top it starts right away; without one there's nothing to run yet.
                 if let prompt = store.pendingClaudePrompt {
                     // Only a failure goes to the row, so a start doesn't clear a git error still showing there.
@@ -955,6 +993,28 @@ private struct RepoRow: View {
 }
 
 /// A repository's app in its resting row: a green dot and the port while it runs, a red mark if it crashed.
+/// "Commit & Push", crossfading to "Commit" while ⌥ is held. Both are laid out, so the button keeps
+/// the wider one's width and nothing beside it moves; only the words fade. Only this observes ⌥.
+private struct CommitLabel: View {
+    let canPush: Bool
+    @ObservedObject private var keys = ModifierKeys.shared
+
+    var body: some View {
+        let pushes = canPush && !keys.option
+        if !canPush {
+            Text("Commit")
+        } else {
+            ZStack {
+                Text("Commit & Push").opacity(pushes ? 1 : 0)
+                Text("Commit").opacity(pushes ? 0 : 1)
+            }
+            .animation(.easeInOut(duration: 0.18), value: pushes)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(pushes ? "Commit & Push" : "Commit")
+        }
+    }
+}
+
 private struct ServerBadge: View {
     @ObservedObject var server: DevServer
     /// 1 while the port glows green as the app starts answering (its address appears), fading to 0,
@@ -1007,57 +1067,6 @@ private struct ServerBadge: View {
 private func agentHelp(agent: String, terminal: String, in folder: String? = nil, prompt: String?, chrome: Bool) -> String {
     let base = "Open \(agent)" + (chrome ? " with Chrome" : "") + " in \(terminal)" + (folder.map { " in \($0)" } ?? "")
     return prompt.map { "\(base) and run \($0)" } ?? base
-}
-
-/// Whether agent buttons start the agent with Chrome (Claude's `--chrome`). A native toggle button:
-/// bezel when on, and Chrome's icon in color when on, gray when off.
-private struct ChromeToggle: View {
-    @Binding var isOn: Bool
-    let agent: String
-
-    var body: some View {
-        Toggle(isOn: $isOn) {
-            if let chrome = Logo.chrome {
-                Image(nsImage: chrome).resizable().scaledToFit().frame(width: 14, height: 14)
-                    .saturation(isOn ? 1 : 0)
-            } else {
-                Image(systemName: "globe")
-            }
-        }
-        .toggleStyle(.panel)
-        .panelTooltip("Start \(agent) with Chrome")
-        .accessibilityLabel("Start \(agent) with Chrome")
-    }
-}
-
-/// Whether Terminal windows (plain and with Claude) open in the "Clear Dark" profile or Terminal's default.
-private struct DarkTerminalToggle: View {
-    @Binding var isOn: Bool
-
-    var body: some View {
-        Toggle(isOn: $isOn) {
-            // A blue drop, for the profile's translucent blue look.
-            Image(systemName: "drop.fill")
-                .foregroundStyle(isOn ? AnyShapeStyle(Color(red: 0.35, green: 0.62, blue: 1)) : AnyShapeStyle(.secondary))
-        }
-        .toggleStyle(.panel)
-        .panelTooltip("Clear Dark Terminal profile")
-        .accessibilityLabel("Clear Dark Terminal profile")
-    }
-}
-
-/// Whether a project's Rex terminals split its session's window or open as tabs in it.
-private struct RexSplitToggle: View {
-    @Binding var isOn: Bool
-
-    var body: some View {
-        Toggle(isOn: $isOn) {
-            Image(systemName: isOn ? "rectangle.split.2x1" : "rectangle.stack")
-        }
-        .toggleStyle(.panel)
-        .panelTooltip("Split the project's Rex window (off: tabs)")
-        .accessibilityLabel("Split the project's Rex window")
-    }
 }
 
 /// What the empty prompt field suggests. A fixed "like /init" was read once and then never again, so it
@@ -1155,7 +1164,9 @@ private struct ClaudeComposer: View {
     private var withChrome: Bool { store.agentWithBrowser && agent.info.can(.browser) }
 
     /// The row picked with ↑/↓, or else the open one: the repository the suggestions are about.
-    var selectedRepo: String? = nil
+    /// Observed here rather than by the list (see `ExpandedRepo.Row`).
+    @ObservedObject private var expansion = ExpandedRepo.shared
+    private var selectedRepo: String? { expansion.selected ?? expansion.path }
 
     /// Which of `ComposerPlaceholder.all` the empty field shows.
     @State private var placeholderIndex = Int.random(in: 0..<ComposerPlaceholder.all.count)
@@ -1206,32 +1217,38 @@ private struct ClaudeComposer: View {
     var body: some View {
         HStack(spacing: 6) {
             if agent.info.can(.initialPrompt) {
-                TextField(placeholder, text: $store.claudePrompt)
+                // The suggestion is drawn over the field rather than set as its placeholder: AppKit's
+                // placeholder is slow to change (setPlaceholderString), and it changes with every row
+                // opened or picked, which made that a good part of opening a row.
+                TextField(text: $store.claudePrompt, prompt: Text(verbatim: "")) { Text("Prompt") }
+                    .overlay(alignment: .leading) {
+                        if store.claudePrompt.isEmpty {
+                            Text(verbatim: placeholder)
+                                .foregroundStyle(Color(nsColor: .placeholderTextColor))
+                                .lineLimit(1)
+                                .padding(.leading, PanelMetrics.fieldTextInset)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
+                    }
+                    .accessibilityHint(placeholder)
                     .focused(isFocused)
                     .onSubmit { if !submitSelection() { send() } }
                     .onKeyPress(.downArrow) { moveSelection(1); return .handled }
                     .onKeyPress(.upArrow) { moveSelection(-1); return .handled }
                     .onExitCommand(perform: escape)
-                    .panelField(isFocused: isFocused.wrappedValue)
+                    .panelField()
             } else {
                 Spacer()
             }
             // Settings for how the agent and terminals open, in a tray of their own, set apart from the
             // terminal and send buttons beside them, which do something.
-            PanelToggleGroup {
-                // Each terminal's own setting: Terminal's Clear Dark profile, Rex's split windows.
-                if !(Terminals.current is Rex) {
-                    DarkTerminalToggle(isOn: $store.darkTerminal)
-                } else {
-                    RexSplitToggle(isOn: $store.rexSplit)
-                }
-                if agent.info.can(.browser) {
-                    ChromeToggle(isOn: $store.agentWithBrowser, agent: agent.info.name)
-                }
-            }
-            // Field, switches, terminal and send all as tall as one another (`PanelMetrics.fieldHeight`).
+            PanelToggleBar(toggleItems)
+                .controlSize(.large)
+                .fixedSize()
+            // Field, switches, terminal and send all at the large size, as tall as one another.
             Button { DevWorkspace.openTerminal("/") } label: { Image(systemName: "terminal") }
-                .buttonStyle(.fieldRow(iconOnly: true))
+                .fieldRowButton()
                 .panelTooltip("Open \(agent.terminalName) in /")
                 .accessibilityLabel("Open \(agent.terminalName) in /")
             if agent.info.isInstalled {
@@ -1244,11 +1261,30 @@ private struct ClaudeComposer: View {
         .task { await ComposerPlaceholder.prefetch(store.repos.map(\.path)) }
     }
 
+    /// Settings for how the agent and terminals open: each terminal's own (Terminal's Clear Dark
+    /// profile, Rex's split windows), and Chrome for the agent.
+    private var toggleItems: [PanelToggleItem] {
+        var items: [PanelToggleItem] = []
+        if !(Terminals.current is Rex) {
+            items.append(PanelToggleItem(systemImage: "drop.fill", name: "Clear Dark Terminal profile", isOn: $store.darkTerminal))
+        } else {
+            items.append(PanelToggleItem(systemImage: store.rexSplit ? "rectangle.split.2x1" : "rectangle.stack",
+                                         name: "Split the project's Rex window\nOff: tabs", isOn: $store.rexSplit))
+        }
+        if agent.info.can(.browser) {
+            let name = "Start \(agent.info.name) with Chrome"
+            // Chrome's logo in color while on, grey while off, like the symbols beside it.
+            let image = Logo.chrome.map { store.agentWithBrowser ? $0 : $0.grayscale } ?? NSImage(systemSymbolName: "globe", accessibilityDescription: name) ?? NSImage()
+            items.append(PanelToggleItem(image.sized(16), name: name, isOn: $store.agentWithBrowser))
+        }
+        return items
+    }
+
     /// Prominent in the agent's color once there's a prompt to send, like the agent buttons in the rows.
     private var sendButton: some View {
         let help = agentHelp(agent: agent.info.name, terminal: agent.terminalName, in: "/", prompt: store.pendingClaudePrompt, chrome: withChrome)
         return Button(action: send) { Image(systemName: "arrow.up").fontWeight(.semibold) }
-            .buttonStyle(.fieldRow(prominent: store.pendingClaudePrompt != nil, tint: Agent.current.tint, iconOnly: true))
+            .fieldRowButton(prominent: store.pendingClaudePrompt != nil, tint: Agent.current.tint)
             .panelTooltip(help)
             .accessibilityLabel(help)
     }
@@ -1378,7 +1414,7 @@ private struct SkillPicker: View {
             TextField("/skill, or any prompt", text: $text)
                 .focused($searchFocused)
                 .onSubmit { pin(text) }
-                .panelField(isFocused: searchFocused)
+                .panelField()
                 .padding(10)
             if available.contains(where: \.isProject) {
                 Picker("", selection: $projectOnly) {
@@ -1715,27 +1751,29 @@ private struct ClaudeWrites: ViewModifier {
     private var canWrite: Bool { enabled && agent.info.can(.headless) }
 
     func body(content: Content) -> some View {
-        // Beside the text, inside the same field, rather than laid over it: over it, a long placeholder
-        // ran into it.
-        HStack(spacing: 10) {
-            content
-                .overlay(alignment: .leading) {
-                    if isWriting && isEmpty {
-                        ShimmerText("\(agent.info.name) is writing…")
-                            .allowsHitTesting(false)
-                    }
+        // Inside the field's border, at its end, only while the field is empty, so it never runs into
+        // typed text; the placeholder there is short ("3 changes · +12 −4").
+        content
+            .overlay(alignment: .leading) {
+                if isWriting && isEmpty {
+                    ShimmerText("\(agent.info.name) is writing…")
+                        .padding(.leading, PanelMetrics.fieldTextInset)
+                        .allowsHitTesting(false)
                 }
-            if isEmpty && !isWriting && canWrite {
-                Button(action: action) {
-                    Text("Write with \(agent.info.name) \(Image(systemName: "arrow.right.to.line"))")
-                        .font(.caption)
-                        .foregroundStyle(hovering ? .secondary : .tertiary)
-                }
-                .buttonStyle(.plain)
-                .fixedSize()
-                .onHover { hovering = $0 }
             }
-        }
+            .overlay(alignment: .trailing) {
+                if isEmpty && !isWriting && canWrite {
+                    Button(action: action) {
+                        Text("Write with \(agent.info.name) \(Image(systemName: "arrow.right.to.line"))")
+                            .font(.caption)
+                            .foregroundStyle(hovering ? .secondary : .tertiary)
+                    }
+                    .buttonStyle(.plain)
+                    .fixedSize()
+                    .padding(.trailing, PanelMetrics.fieldTextInset)
+                    .onHover { hovering = $0 }
+                }
+            }
             // Tab in the empty field, as accepting a completion does in an editor.
             .onKeyPress(.tab) {
                 guard isEmpty, !isWriting, canWrite else { return .ignored }

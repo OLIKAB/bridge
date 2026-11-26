@@ -520,7 +520,7 @@ private struct RepoSidebar: View {
 
             TextField("Filter repositories", text: $filter)
                 .focused($filterFocused)
-                .panelField(isFocused: filterFocused, compact: true)
+                .panelField(compact: true)
                 // Esc clears the filter, as in a search field.
                 .onExitCommand { filter = "" }
                 .padding(.horizontal, 10)
@@ -674,7 +674,7 @@ private struct BranchPicker: View {
                 // Return switches to the first branch the filter finds, so a branch is a few keys away.
                 TextField("Filter branches", text: $filter)
                     .focused($filterFocused)
-                    .panelField(isFocused: filterFocused)
+                    .panelField()
                     .onSubmit {
                         if !filter.isEmpty, let first = local.first ?? remote.first { switchTo(first) }
                     }
@@ -683,7 +683,7 @@ private struct BranchPicker: View {
                     newName = filter
                     nameFocused = true
                 }
-                .buttonStyle(.fieldRow)
+                .fieldRowButton()
             }
             .padding(10)
 
@@ -693,11 +693,11 @@ private struct BranchPicker: View {
                         .focused($nameFocused)
                         .onSubmit(create)
                         .onExitCommand { creating = false }
-                        .panelField(isFocused: nameFocused)
+                        .panelField()
                     Button("Cancel") { creating = false }
-                        .buttonStyle(.fieldRow)
+                        .fieldRowButton()
                     Button("Create", action: create)
-                        .buttonStyle(.fieldRow(prominent: true))
+                        .fieldRowButton(prominent: true)
                         .disabled(cleanName.isEmpty)
                 }
                 .padding([.horizontal, .bottom], 10)

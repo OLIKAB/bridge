@@ -4,6 +4,8 @@
 
 <p align="center">Your repositories, dev servers and coding agents, one click away in the macOS menu bar.</p>
 
+<p align="center"><a href="LICENSE"><img src="https://img.shields.io/github/license/OLIKAB/bridge" alt="License: MIT"></a></p>
+
 ## What it does
 
 **Repos.** Every git repository you work in, with what's going on in each: local changes, commits to push or pull, a running dev server, an agent session. Commit, pull and push from the panel, have your coding agent write the commit message, start the project's dev server in the background, or open the agent in your terminal. A main window adds changes, history and diffs.

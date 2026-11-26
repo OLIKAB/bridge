@@ -19,7 +19,7 @@ public protocol TerminalApp: Sendable {
 }
 
 extension TerminalApp {
-    public var appURL: URL? { NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) }
+    public var appURL: URL? { InstalledApps.url(for: bundleId) }
     public var isInstalled: Bool { appURL != nil }
 
     public func scriptPrelude() -> String { "" }

@@ -119,7 +119,7 @@ struct NewProjectForm: View {
                         .labelsHidden()
                         .onSubmit(create)
                         .focused($nameFocused)
-                        .panelField(isFocused: nameFocused)
+                        .panelField()
                 }
                 LabeledContent("Location") {
                     HStack {

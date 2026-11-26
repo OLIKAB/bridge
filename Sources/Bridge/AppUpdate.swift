@@ -16,7 +16,7 @@ final class AppUpdate: ObservableObject {
 
     /// owner/name of the GitHub repository with the releases, from the Info.plist `build.sh` writes
     /// (`UPDATE_REPO`), so the releases can live in a public repository while the code doesn't.
-    nonisolated static let repository = Bundle.main.object(forInfoDictionaryKey: "UpdateRepository") as? String ?? "OLIKAB/dev-menubar"
+    nonisolated static let repository = Bundle.main.object(forInfoDictionaryKey: "UpdateRepository") as? String ?? "OLIKAB/bridge"
     static let enabledKey = "checksForUpdates"
 
     struct Release: Equatable {

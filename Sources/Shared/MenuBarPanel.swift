@@ -50,64 +50,15 @@ public extension View {
 }
 
 public extension View {
-    /// One look for every text field, in the panels and in their popovers: the same height and shape,
-    /// a faint fill with a hairline edge at rest, a stronger fill and edge under the pointer (so it reads
-    /// as something to click into), and an accent ring while typing. Pass the field's focus, since a
-    /// modifier can't see whether the field inside it has it.
-    /// `compact` for a field that stands in for a row's title while renaming it, so the row keeps its height.
-    func panelField(isFocused: Bool = false, compact: Bool = false) -> some View {
-        modifier(PanelField(isFocused: isFocused, compact: compact))
-    }
-}
-
-private struct PanelField: ViewModifier {
-    let isFocused: Bool
-    let compact: Bool
-    @State private var hovering = false
-
-    func body(content: Content) -> some View {
-        content
-            .textFieldStyle(.plain)
-            // A text editor draws its own background unless told not to.
-            .scrollContentBackground(.hidden)
-            // A plain field doesn't clip its text: a line longer than the field, scrolled to its end
-            // (a commit message typed in), was drawn out past the field's left edge over the row.
-            // Clipped at the text's own sides; the slack above and below keeps descenders and the
-            // caret whole.
-            .mask(Rectangle().padding(.vertical, -6))
-            .padding(.horizontal, compact ? 6 : 10)
-            .padding(.vertical, compact ? 2 : 4)
-            // As tall as the buttons beside it (`PanelMetrics.fieldHeight`), whatever its font; taller
-            // only when it's a multi-line field with more lines.
-            .frame(minHeight: compact ? nil : PanelMetrics.fieldHeight)
-            // Not `minHeight`: a minimum height in the content becomes the panel window's minimum.
-            .background(isFocused || hovering ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.quinary), in: PanelShape())
-            .overlay {
-                PanelShape()
-                    .strokeBorder(edge, lineWidth: isFocused ? 1.5 : 1)
-                    .allowsHitTesting(false)
-            }
-            .contentShape(Rectangle())
-            .onHover { hovering = $0 }
-            .animation(.easeOut(duration: 0.12), value: isFocused)
-    }
-
-    private var edge: AnyShapeStyle {
-        if isFocused { return AnyShapeStyle(Color.accentColor.opacity(0.7)) }
-        return hovering ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.quaternary)
-    }
-}
-
-/// A text field's shape: as round as a highlight in the middle of a panel, as one shape for fill and ring.
-private struct PanelShape: InsettableShape {
-    var inset: CGFloat = 0
-
-    func path(in rect: CGRect) -> Path {
-        RoundedRectangle(cornerRadius: PanelMetrics.fieldCornerRadius, style: .continuous).path(in: rect.insetBy(dx: inset, dy: inset))
-    }
-
-    func inset(by amount: CGFloat) -> PanelShape {
-        PanelShape(inset: inset + amount)
+    /// Every text field, in the panels, their popovers and the main window: the system's rounded field,
+    /// large so it's as tall as the buttons beside it (`fieldRowButton`), with the system's focus ring.
+    /// A drawn field (fill, hairline, accent ring) was used while the apps were linked as for macOS 14
+    /// and got the old square fields; with the real SDK (`currentSDK` in Package.swift) the system's
+    /// own is the one that looks at home. `compact` for a field that stands in for a row's title while
+    /// renaming it, so the row keeps its height.
+    func panelField(compact: Bool = false) -> some View {
+        textFieldStyle(.roundedBorder)
+            .controlSize(compact ? .regular : .large)
     }
 }
 

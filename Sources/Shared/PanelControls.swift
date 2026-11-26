@@ -1,3 +1,5 @@
+import AppKit
+import CoreImage
 import SwiftUI
 
 /// The hover and press feedback every small control in the panels shares, so nothing under the pointer
@@ -52,9 +54,10 @@ public extension ButtonStyle where Self == PanelButtonStyle {
     static var panel: PanelButtonStyle { PanelButtonStyle() }
 }
 
-/// An icon that switches a setting on and off, told apart from buttons that do something: while on,
-/// the glyph is in the accent color on an accent fill, like a selected segment; while off, it's grey
-/// with only the shared hover. Group switches in `PanelToggleGroup`, so they read as a set of options.
+/// An icon that switches something on and off among other icons on glass (the main window's toolbar
+/// groups), where a segmented control would look out of place: while on, it sits on a raised neutral
+/// thumb with the glyph in the accent color; while off, it's grey with only the shared hover. In the
+/// panels, switches are a `PanelToggleBar`.
 public struct PanelToggleStyle: ToggleStyle {
     public init() {}
 
@@ -69,24 +72,27 @@ private struct PanelToggleBody: View {
 
     var body: some View {
         let isOn = configuration.isOn
+        let shape = RoundedRectangle(cornerRadius: PanelMetrics.fieldCornerRadius - 2, style: .continuous)
         Button { configuration.isOn.toggle() } label: {
             configuration.label
                 .foregroundStyle(isOn ? AnyShapeStyle(.tint) : hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-                // In a `PanelToggleGroup` tray (2 pt around), as tall as a text field, its corners
-                // concentric with the tray's.
                 .frame(width: 28, height: PanelMetrics.fieldHeight - 4)
-                .background(fill(isOn), in: RoundedRectangle(cornerRadius: PanelMetrics.fieldCornerRadius - 2, style: .continuous))
+                .background {
+                    if isOn {
+                        // The thumb: lighter than the tray, with a hairline and a soft shadow under it.
+                        shape.fill(Color(nsColor: .controlColor).opacity(hovering ? 1 : 0.85))
+                            .overlay(shape.strokeBorder(.white.opacity(0.08)))
+                            .shadow(color: .black.opacity(0.18), radius: 1.5, y: 0.5)
+                    } else if hovering {
+                        shape.fill(.quaternary)
+                    }
+                }
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .accessibilityValue(isOn ? "On" : "Off")
         .accessibilityAddTraits(isOn ? .isSelected : [])
-    }
-
-    private func fill(_ isOn: Bool) -> AnyShapeStyle {
-        if isOn { return hovering ? AnyShapeStyle(.tint.tertiary) : AnyShapeStyle(.tint.quaternary) }
-        return hovering ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.clear)
     }
 }
 
@@ -101,86 +107,172 @@ public enum PanelMetrics {
     public static let fieldHeight: CGFloat = 28
     /// The corner radius shared by a field and the buttons beside it.
     public static let fieldCornerRadius: CGFloat = 8
+    /// How far in from a large system field's edge its text starts, for text laid over a field
+    /// (a placeholder that changes often, Claude writing).
+    public static let fieldTextInset: CGFloat = 8
 }
 
-/// A button in a line with a text field (Commit & Push, Send, Terminal): exactly as tall as the field
-/// and as round, filled like it, or in the accent (or `tint`) when it's the line's main action.
-public struct PanelFieldButtonStyle: ButtonStyle {
-    let prominent: Bool
-    let tint: Color?
-    let iconOnly: Bool
-
-    public init(prominent: Bool = false, tint: Color? = nil, iconOnly: Bool = false) {
-        self.prominent = prominent
-        self.tint = tint
-        self.iconOnly = iconOnly
+public extension NSImage {
+    /// A copy in shades of grey, for a colored logo standing for something that's off.
+    @MainActor var grayscale: NSImage {
+        if let cached = GrayImages.cache.object(forKey: self) { return cached }
+        guard let cg = cgImage(forProposedRect: nil, context: nil, hints: nil) else { return self }
+        let gray = CIImage(cgImage: cg).applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0])
+        let image = NSImage(size: size)
+        image.addRepresentation(NSCIImageRep(ciImage: gray))
+        GrayImages.cache.setObject(image, forKey: self)
+        return image
     }
 
-    public func makeBody(configuration: Configuration) -> some View {
-        PanelFieldButton(configuration: configuration, prominent: prominent, tint: tint, iconOnly: iconOnly)
+    /// A copy drawn at `side` points square.
+    func sized(_ side: CGFloat) -> NSImage {
+        let copy = self.copy() as? NSImage ?? self
+        copy.size = NSSize(width: side, height: side)
+        return copy
     }
 }
 
-private struct PanelFieldButton: View {
-    let configuration: ButtonStyleConfiguration
-    let prominent: Bool
-    let tint: Color?
-    let iconOnly: Bool
-    @Environment(\.isEnabled) private var isEnabled
-    @State private var hovering = false
+@MainActor private enum GrayImages {
+    static let cache = NSCache<NSImage, NSImage>()
+}
 
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: PanelMetrics.fieldCornerRadius, style: .continuous)
-        configuration.label
-            .font(prominent ? .callout.weight(.medium) : .callout)
-            .lineLimit(1)
-            .padding(.horizontal, iconOnly ? 0 : 12)
-            .frame(width: iconOnly ? PanelMetrics.fieldHeight + 4 : nil, height: PanelMetrics.fieldHeight)
-            .foregroundStyle(prominent ? AnyShapeStyle(.white) : hovering ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
-            .background(fill, in: shape)
-            .overlay {
-                if !prominent { shape.strokeBorder(.quaternary) }
-            }
-            .opacity(isEnabled ? 1 : 0.45)
-            .contentShape(shape)
-            .onHover { hovering = $0 && isEnabled }
-    }
-
-    private var fill: AnyShapeStyle {
+public extension View {
+    /// A button in a line with a text field (Commit & Push, Send, Terminal): the system's bordered button
+    /// at the large size, which is as tall as a large text field (`panelField`); `prominent` for the
+    /// line's main action, in the accent or `tint`. Drawn buttons and fields were used before, made to
+    /// match each other; the system's own match each other already.
+    @ViewBuilder
+    func fieldRowButton(prominent: Bool = false, tint: Color? = nil) -> some View {
         if prominent {
-            let color = tint ?? .accentColor
-            return AnyShapeStyle(color.opacity(configuration.isPressed ? 0.75 : hovering ? 0.9 : 1))
+            buttonStyle(.borderedProminent).tint(tint).controlSize(.large)
+        } else {
+            buttonStyle(.bordered).controlSize(.large)
         }
-        if configuration.isPressed { return AnyShapeStyle(.tertiary) }
-        return hovering ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.quinary)
     }
 }
 
-public extension ButtonStyle where Self == PanelFieldButtonStyle {
-    /// A secondary button beside a text field.
-    static var fieldRow: PanelFieldButtonStyle { PanelFieldButtonStyle() }
+/// One on/off icon in a `PanelToggleBar`.
+public struct PanelToggleItem {
+    let image: NSImage
+    let name: String
+    let isOn: Binding<Bool>
 
-    /// A button beside a text field: `prominent` for the line's main action.
-    static func fieldRow(prominent: Bool = false, tint: Color? = nil, iconOnly: Bool = false) -> PanelFieldButtonStyle {
-        PanelFieldButtonStyle(prominent: prominent, tint: tint, iconOnly: iconOnly)
+    /// `name` is the tooltip and VoiceOver label (a first line, details after "\n").
+    public init(_ image: NSImage, name: String, isOn: Binding<Bool>) {
+        // VoiceOver reads a segment by its image's description: the tooltip's first line.
+        let label = name.split(separator: "\n").first.map(String.init) ?? name
+        if image.accessibilityDescription == label {
+            self.image = image
+        } else {
+            let copy = image.copy() as? NSImage ?? image
+            copy.accessibilityDescription = label
+            self.image = copy
+        }
+        self.name = name
+        self.isOn = isOn
+    }
+
+    public init(systemImage: String, name: String, isOn: Binding<Bool>) {
+        let image = NSImage(systemSymbolName: systemImage, accessibilityDescription: name) ?? NSImage()
+        self.init(image, name: name, isOn: isOn)
     }
 }
 
-/// Switches (`.toggleStyle(.panel)`) side by side in one faint capsule-like tray, so a row of options
-/// looks different from a row of buttons that open or run something, as a segmented control does.
-public struct PanelToggleGroup<Content: View>: View {
-    let content: Content
+/// Icons that switch settings on and off, side by side: the system's segmented control with any number
+/// of segments selected (`selectAny`), so it looks like the tab switch above it and like the option
+/// bars in macOS's own toolbars, and a switch never looks like a button that runs something. It
+/// replaced a drawn tray of drawn switches, whose on state never looked like the system's.
+/// Takes the size from `.controlSize`.
+public struct PanelToggleBar: NSViewRepresentable {
+    let items: [PanelToggleItem]
 
-    public init(@ViewBuilder content: () -> Content) {
-        self.content = content()
+    public init(_ items: [PanelToggleItem]) {
+        self.items = items
     }
 
-    public var body: some View {
-        let shape = RoundedRectangle(cornerRadius: PanelMetrics.fieldCornerRadius, style: .continuous)
-        HStack(spacing: 2) { content }
-            .padding(2)
-            .background(.quinary, in: shape)
-            .overlay(shape.strokeBorder(.quaternary))
+    public func makeNSView(context: Context) -> ToggleSegments {
+        let control = ToggleSegments()
+        control.trackingMode = .selectAny
+        control.segmentStyle = .automatic
+        control.target = context.coordinator
+        control.action = #selector(Coordinator.changed(_:))
+        control.setContentHuggingPriority(.required, for: .horizontal)
+        control.setContentHuggingPriority(.required, for: .vertical)
+        return control
+    }
+
+    public func updateNSView(_ control: ToggleSegments, context: Context) {
+        context.coordinator.items = items
+        control.controlSize = context.environment.controlSize.appKit
+        if control.segmentCount != items.count { control.segmentCount = items.count }
+        for (index, item) in items.enumerated() {
+            if control.image(forSegment: index) != item.image { control.setImage(item.image, forSegment: index) }
+            control.setImageScaling(.scaleProportionallyDown, forSegment: index)
+            control.setSelected(item.isOn.wrappedValue, forSegment: index)
+        }
+        let tooltips = context.coordinator.tooltips
+        control.onHover = { [weak control] index in
+            guard let control else { return }
+            let text = index.map { context.coordinator.items.indices.contains($0) ? context.coordinator.items[$0].name : "" } ?? ""
+            tooltips.hover(index, text: text, rect: index.map(control.segmentRect) ?? .zero, in: control)
+        }
+    }
+
+    public func makeCoordinator() -> Coordinator { Coordinator() }
+
+    @MainActor
+    public final class Coordinator: NSObject {
+        var items: [PanelToggleItem] = []
+        let tooltips = PartTooltips()
+
+        @objc func changed(_ control: NSSegmentedControl) {
+            for (index, item) in items.enumerated() where control.isSelected(forSegment: index) != item.isOn.wrappedValue {
+                item.isOn.wrappedValue = control.isSelected(forSegment: index)
+            }
+        }
+    }
+}
+
+/// The segmented control behind `PanelToggleBar`: says which segment is under the pointer, for its
+/// tooltips (`panelTooltip` can't go on a segment).
+public final class ToggleSegments: NSSegmentedControl {
+    var onHover: ((Int?) -> Void)?
+    private var tracking: NSTrackingArea?
+
+    public override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    public override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let x = convert(event.locationInWindow, from: nil).x
+        onHover?((0..<segmentCount).first { segmentRect($0).minX <= x && x < segmentRect($0).maxX })
+    }
+
+    public override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        onHover?(nil)
+    }
+
+    /// Where a segment is: they're as wide as one another, each holding one icon of the same size.
+    func segmentRect(_ index: Int) -> CGRect {
+        let width = bounds.width / CGFloat(max(segmentCount, 1))
+        return CGRect(x: width * CGFloat(index), y: 0, width: width, height: bounds.height)
+    }
+}
+
+private extension ControlSize {
+    var appKit: NSControl.ControlSize {
+        switch self {
+        case .mini: .mini
+        case .small: .small
+        case .large, .extraLarge: .large
+        default: .regular
+        }
     }
 }
 

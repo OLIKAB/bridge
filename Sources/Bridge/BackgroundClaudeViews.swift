@@ -168,12 +168,12 @@ private struct ClaudeSessionDetail: View {
                     .lineLimit(1...6)
                     .focused($answerFocused)
                     .onSubmit(send)
-                    .panelField(isFocused: answerFocused)
+                    .panelField()
                 Button(action: send) {
                     Image(systemName: "arrow.up").fontWeight(.semibold)
                 }
                 // As tall as the field's first line, beside it.
-                .buttonStyle(.fieldRow(prominent: true, iconOnly: true))
+                .fieldRowButton(prominent: true)
                 .disabled(!canSend)
                 .accessibilityLabel("Send")
                 .panelTooltip("Send (↩)")
@@ -298,7 +298,7 @@ struct BackgroundClaudeForm: View {
                 .lineLimit(3...10)
                 .focused($focused)
                 .onSubmit(start)
-                .panelField(isFocused: focused)
+                .panelField()
             if let error {
                 Text(verbatim: error).font(.caption).foregroundStyle(.red).lineLimit(4).textSelection(.enabled)
             }

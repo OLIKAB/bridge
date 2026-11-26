@@ -1,6 +1,24 @@
 import AppKit
 import SwiftUI
 
+/// Where an app is installed, as NSWorkspace says, remembered for half a minute. Menus and rows ask
+/// for every editor and terminal each time they're drawn (a row's context menu is built with the
+/// row), and each answer is a Launch Services lookup: a list of repositories redrawn spent a good
+/// part of its time there. An app installed or removed shows within half a minute.
+public enum InstalledApps {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var cache: [String: (url: URL?, at: Date)] = [:]
+
+    public static func url(for bundleId: String) -> URL? {
+        lock.lock()
+        defer { lock.unlock() }
+        if let entry = cache[bundleId], Date().timeIntervalSince(entry.at) < 30 { return entry.url }
+        let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId)
+        cache[bundleId] = (url, Date())
+        return url
+    }
+}
+
 public struct Editor: Identifiable {
     public let name: String
     public let bundleId: String
@@ -35,7 +53,7 @@ public struct Editor: Identifiable {
     /// The installed editors, then the terminal Bridge opens (only that one, since every terminal
     /// Bridge opens goes there).
     public static var installed: [Editor] {
-        let editors = all.filter { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.bundleId) != nil }
+        let editors = all.filter { InstalledApps.url(for: $0.bundleId) != nil }
         let terminal = Terminals.current.map { Editor(name: $0.name, bundleId: $0.bundleId) }
         return editors + (terminal.map { [$0] } ?? [])
     }

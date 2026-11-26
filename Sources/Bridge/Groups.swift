@@ -401,7 +401,7 @@ struct GroupNameForm: View {
             TextField("Name", text: $name)
                 .focused($focused)
                 .onSubmit(submit)
-                .panelField(isFocused: focused)
+                .panelField()
             if groups.names.contains(trimmed) && trimmed != initial {
                 Text(initial.isEmpty ? "Goes into the existing group \(trimmed)" : "Merges into the existing group \(trimmed)")
                     .font(.caption)

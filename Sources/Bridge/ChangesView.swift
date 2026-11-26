@@ -319,7 +319,7 @@ private struct CommitBox: View {
                 .focused($summaryFocused)
                 .claudeWrites(isEmpty: state.summary.isEmpty, isWriting: isSuggesting,
                               enabled: repo.status?.files.isEmpty == false, action: suggest)
-                .panelField(isFocused: summaryFocused)
+                .panelField()
             if repo.needsAgentLogin {
                 AgentLoginNotice(message: "\(Agent.current.shortName) needs you to log in again.",
                                  dismiss: { repo.needsAgentLogin = false },
@@ -331,7 +331,7 @@ private struct CommitBox: View {
             TextField("Description", text: $state.description, axis: .vertical)
                 .lineLimit(3...8)
                 .focused($descriptionFocused)
-                .panelField(isFocused: descriptionFocused)
+                .panelField()
 
             Button(action: commit) {
                 if repo.activity == .committing || repo.activity == .pushing {

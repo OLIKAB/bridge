@@ -39,7 +39,7 @@ struct StartCommandEditor: View {
                 .font(.system(.body, design: .monospaced))
                 .onSubmit(save)
                 .focused($commandFocused)
-                .panelField(isFocused: commandFocused)
+                .panelField()
             if !scripts.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Scripts in this folder").font(.caption).foregroundStyle(.secondary)
