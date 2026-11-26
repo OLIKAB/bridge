@@ -8,7 +8,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VERSION="0.2.0"
+VERSION="0.3.0"
 
 # The GitHub repository whose releases Bridge checks for updates (written into its Info.plist).
 UPDATE_REPO="${UPDATE_REPO:-OLIKAB/bridge}"
