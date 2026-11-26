@@ -36,6 +36,20 @@ swift build                 # quick compile check
 
 No dependencies beyond Xcode's command line tools. `build.sh` signs with your Apple Development certificate when you have one (ad hoc otherwise; then macOS asks for folder access again after each build).
 
+## Claude Code usage left
+
+With Claude Code, the top line of the panel can show how much of your plan's 5-hour and weekly limits is left. Claude Code has no command that prints this, but it hands the limits to your [status line](https://code.claude.com/docs/en/statusline) script, so the script saves them for Bridge. Add this to your status line script (it needs `jq`):
+
+```sh
+input=$(cat)
+limits=$(echo "$input" | jq -c '.rate_limits // empty')
+if [ -n "$limits" ] && [ "$limits" != "{}" ]; then
+  tmp=$(mktemp "$HOME/.claude/.rate-limits.XXXXXX") && printf '%s' "$limits" > "$tmp" && mv "$tmp" "$HOME/.claude/rate-limits.json"
+fi
+```
+
+The numbers are as fresh as your last Claude Code session. Without the file, Bridge leaves the usage out.
+
 ## Shortcuts
 
 - ⌥⌘G opens Repos, ⌥⌘P opens Servers.
