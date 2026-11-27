@@ -3,8 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Bridge</title>
-<meta name="description" content="Your repos, servers and agents, in the macOS menu bar.">
+<title>Bridge: repos, servers and agents in the macOS menu bar</title>
+<meta name="description" content="Your repos, servers and agents, in the macOS menu bar. Commit, pull and push, run dev servers and open a coding agent, from one panel. Free and open source.">
+<link rel="canonical" href="https://bridge.olikab.com/">
 <meta property="og:title" content="Bridge">
 <meta property="og:description" content="Your repos, servers and agents, in the macOS menu bar.">
 <meta property="og:image" content="https://bridge.olikab.com/assets/og.jpg">
@@ -13,6 +14,15 @@
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="assets/favicon.png" sizes="32x32">
 <link rel="apple-touch-icon" href="assets/icon-256.png">
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "Bridge",
+ "description": "Your repos, servers and agents, in the macOS menu bar.",
+ "applicationCategory": "DeveloperApplication", "operatingSystem": "macOS 14 or later",
+ "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"},
+ "license": "https://opensource.org/licenses/MIT", "url": "https://bridge.olikab.com/",
+ "downloadUrl": "https://bridge.olikab.com/download", "image": "https://bridge.olikab.com/assets/icon-256.png",
+ "codeRepository": "https://github.com/OLIKAB/bridge"}
+</script>
 <style>
 /* The page is set in the Mac's own font, SF Pro, as Bridge's panel is, so the line, the button and the
    recording read as one. It can't be served, but on a Mac the browser takes it from the system. Elsewhere
@@ -53,8 +63,6 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--violet); outlin
 .top { position: absolute; z-index: 6; top: 26px; left: 28px; right: 28px; display: flex; justify-content: space-between; align-items: center; font-weight: 500; font-size: 15px; letter-spacing: -0.01em }
 .mark { display: flex; align-items: center; gap: 9px; opacity: .9 }
 .mark svg { width: 20px; height: 20px }
-.top a.gh { font-size: 14px; color: var(--soft) }
-.top a.gh:hover { color: var(--ink) }
 
 /* Above the grain, so the button and the recording stay clean. A column: the pitch takes what it needs and the
    recording the rest, with the same room above the line as below the recording. */
@@ -78,6 +86,9 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--violet); outlin
 .meta { margin-top: 14px; font-size: 13px; color: rgba(244,244,247,.4) }
 .watch { border: 0; background: none; padding: 0; cursor: pointer; color: rgba(244,244,247,.62); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: rgba(244,244,247,.25) }
 .watch:hover { color: var(--ink) }
+.meta a { color: inherit; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: rgba(244,244,247,.2) }
+.meta a:hover { color: var(--ink) }
+.trust { margin-top: 6px }
 
 /* The recording fills the room left under the pitch, as large as fits in it at its own proportions, and never
    larger than it was recorded (1240 px). The room is a size container, so the recording can size itself to it. */
@@ -123,13 +134,14 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--violet); outlin
       </g></svg>
       Bridge
     </div>
-    <a class="gh" href="https://github.com/OLIKAB/bridge">GitHub</a>
   </header>
 
   <main class="center">
       <h1 class="line"><span>Your repos, servers and agents,</span> <span>in the menu bar.</span></h1>
       <a class="download" id="download" href="/download"><svg viewBox="0 0 17 20" aria-hidden="true"><path fill="currentColor" d="M14.1 10.6c0-2.6 2.1-3.8 2.2-3.9-1.2-1.8-3.1-2-3.7-2-1.6-.2-3.1.9-3.9.9-.8 0-2-.9-3.4-.9C3.6 4.8 1.9 5.8 1 7.4c-1.9 3.3-.5 8.1 1.3 10.8.9 1.3 2 2.7 3.3 2.7 1.3-.1 1.8-.9 3.4-.9s2 .9 3.4.8c1.4 0 2.3-1.3 3.2-2.6 1-1.5 1.4-2.9 1.4-3-.1 0-2.8-1.1-2.9-4.6ZM11.6 3c.7-.9 1.2-2.1 1.1-3.3-1 0-2.3.7-3 1.6-.7.8-1.2 2-1.1 3.2 1.2.1 2.3-.6 3-1.5Z"/></svg>Download for Mac</a>
       <p class="meta"><span id="meta">Free, for macOS 14 or later.</span> <button class="watch" id="watch">Watch the demo</button></p>
+      <!-- What a developer checks before installing a menu bar app: can I read the code, and does it phone home. -->
+      <p class="meta trust"><a href="https://github.com/OLIKAB/bridge">Open source</a> (MIT). One anonymous ping a day, <a href="https://github.com/OLIKAB/bridge#install">off in Settings</a>.</p>
       <div class="stage">
         <!-- A click on the loop plays the whole demo. -->
         <button class="demo" id="demo" aria-label="Watch the whole demo: Claude writes a commit message, the change is committed and pushed, and the dev server starts">
@@ -147,7 +159,7 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--violet); outlin
 
 <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Bridge demo">
   <button class="close" id="close">Close</button>
-  <video id="full" controls playsinline preload="none" poster="assets/demo.jpg" src="assets/demo-full.mp4"></video>
+  <video id="full" controls playsinline preload="none" poster="assets/demo.jpg" src="assets/demo-full.mp4?v=2"></video>
 </div>
 
 <script>
@@ -161,10 +173,11 @@ if (matchMedia('(max-aspect-ratio: 4/5)').matches) loop.poster = 'assets/demo-mo
 if (reduce) { loop.removeAttribute('autoplay'); loop.pause() }
 
 // The whole demo in a lightbox, from the link or a click on the loop; Esc or a click outside closes it,
-// and focus goes back to what opened it. The loop pauses meanwhile.
+// and focus goes back to what opened it. The loop pauses meanwhile. It starts at half volume, so the
+// ambient pad under it comes in quietly; the controls take it up from there.
 const box = document.getElementById('lightbox'), full = document.getElementById('full');
 let opener = null;
-const openBox = e => { opener = e.currentTarget; box.classList.add('open'); loop.pause(); full.currentTime = 0; full.play().catch(() => {}); document.getElementById('close').focus() };
+const openBox = e => { opener = e.currentTarget; box.classList.add('open'); loop.pause(); full.currentTime = 0; full.volume = .5; full.play().catch(() => {}); document.getElementById('close').focus() };
 const shutBox = () => { box.classList.remove('open'); full.pause(); if (!reduce) loop.play().catch(() => {}); opener && opener.focus() };
 document.getElementById('watch').onclick = openBox;
 document.getElementById('demo').onclick = openBox;
