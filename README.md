@@ -25,7 +25,7 @@ It shells out to `git` and your agent's CLI, so your own config, keys, hooks and
 
 ## Install
 
-Download the latest `Bridge-<version>.dmg` from [Releases](../../releases), open it and drag Bridge to Applications. Bridge updates itself: when a new version is out, the panel offers Update.
+Download Bridge from [bridge.olikab.com](https://bridge.olikab.com) (or the latest `Bridge-<version>.dmg` from [Releases](../../releases)), open it and drag Bridge to Applications. Bridge updates itself: when a new version is out, the panel offers Update.
 
 Requires macOS 14 or later, on Apple Silicon or Intel.
 

@@ -3,8 +3,9 @@
 #   ./build.sh            build only
 #   ./build.sh --install  also copy to /Applications and relaunch
 #   ./build.sh --dist     also create a .zip and a .dmg for sharing in dist/
-#   ./build.sh --release  --dist, then publish them as the GitHub release Bridge updates itself from
-#                         (raise VERSION below first; UPDATE_REPO picks the repository, NOTARY_PROFILE notarizes)
+#   ./build.sh --release  --dist, signed and notarized, then publish them as the GitHub release Bridge
+#                         updates itself from (raise VERSION below and commit it first; UPDATE_REPO picks
+#                         the repository, NOTARY_PROFILE the notarytool profile, "bridge" by default)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -27,6 +28,44 @@ for arg in "$@"; do
         *) echo "Unknown argument: $arg" >&2; exit 1 ;;
     esac
 done
+
+# A release is built from the last commit, never from the working tree: several sessions often work in
+# the same tree, and their unfinished changes mustn't ship. So it checks the commit is what should be
+# released, pushes it (the release's tag goes on that commit on GitHub), and builds it in a throwaway
+# worktree, where this script runs again with BRIDGE_RELEASE_COMMIT set and does the rest.
+if [[ "$RELEASE" == 1 && -z "${BRIDGE_RELEASE_COMMIT:-}" ]]; then
+    NOTARY_PROFILE="${NOTARY_PROFILE:-bridge}"
+    COMMIT=$(git rev-parse HEAD)
+    COMMITTED_VERSION=$(git show HEAD:build.sh | sed -n 's/^VERSION="\(.*\)"$/\1/p')
+    if [[ "$COMMITTED_VERSION" != "$VERSION" ]]; then
+        echo "build.sh says $VERSION, but the last commit says $COMMITTED_VERSION: commit the version first." >&2
+        exit 1
+    fi
+    if gh release view "bridge-v${VERSION}" --repo "$UPDATE_REPO" >/dev/null 2>&1; then
+        echo "bridge-v${VERSION} is already released on $UPDATE_REPO: raise VERSION in build.sh first." >&2
+        exit 1
+    fi
+    if [[ "$(git branch --show-current)" != "main" ]]; then
+        echo "Releases are made from main." >&2
+        exit 1
+    fi
+    if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+        echo "No notarytool profile \"$NOTARY_PROFILE\" in the keychain (xcrun notarytool store-credentials)." >&2
+        exit 1
+    fi
+    if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+        echo "Note: uncommitted changes in the working tree are left out of the release."
+    fi
+    # Fails when GitHub has commits this one doesn't: pull (rebase) first, then release.
+    git push origin "$COMMIT:refs/heads/main"
+    WORKTREE=$(mktemp -d)/bridge
+    git worktree add --detach "$WORKTREE" "$COMMIT" >/dev/null
+    trap 'git worktree remove --force "$WORKTREE" 2>/dev/null || true' EXIT
+    (cd "$WORKTREE" && BRIDGE_RELEASE_COMMIT="$COMMIT" NOTARY_PROFILE="$NOTARY_PROFILE" ./build.sh --release)
+    mkdir -p dist
+    cp "$WORKTREE/dist/Bridge-${VERSION}.zip" "$WORKTREE/dist/Bridge-${VERSION}.dmg" dist/
+    exit 0
+fi
 
 BUILD_ARGS=(-c release --arch arm64 --arch x86_64)
 swift build "${BUILD_ARGS[@]}" --product Bridge
@@ -154,11 +193,7 @@ if [[ "$MODE" == "--dist" ]]; then
 
     # Bridge checks for releases tagged bridge-v<version> and updates itself from the zip (AppUpdate.swift).
     if [[ "$RELEASE" == 1 ]]; then
-        if gh release view "bridge-v${VERSION}" --repo "$UPDATE_REPO" >/dev/null 2>&1; then
-            echo "bridge-v${VERSION} is already released on $UPDATE_REPO: raise VERSION in build.sh first." >&2
-            exit 1
-        fi
-        gh release create "bridge-v${VERSION}" "$ZIP" "$DMG" \
+        gh release create "bridge-v${VERSION}" "$ZIP" "$DMG" --target "$BRIDGE_RELEASE_COMMIT" \
             --repo "$UPDATE_REPO" --title "Bridge ${VERSION}" --generate-notes
         echo "Released Bridge ${VERSION} on $UPDATE_REPO; running copies offer the update within six hours, or at once from Settings."
     else
