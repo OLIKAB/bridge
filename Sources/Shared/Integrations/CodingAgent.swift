@@ -10,6 +10,9 @@ public enum AgentCapability: Sendable, Hashable {
     case initialPrompt
     /// Answers one prompt without a terminal and exits (used to write commit messages).
     case headless
+    /// Answers one prompt without a terminal after reading the project, without changing anything in it
+    /// (used to find a start command, `readOnlyArguments`).
+    case readsProject
     /// Runs sessions in the background that can be listed and answered later (`claude --bg`).
     case background
     /// Has skills or slash commands on disk that can be pinned to a repository.
@@ -67,6 +70,9 @@ public protocol CodingAgent: Sendable {
     func interactiveCommand(prompt: String?, options: AgentOptions) -> String
     /// Arguments that answer `prompt` without a terminal and exit, or nil without `.headless`.
     func headlessArguments(prompt: String) -> [String]?
+    /// Arguments that answer `prompt` after looking through the project in the working directory, with
+    /// reading tools only: no edits, and no commands beyond looking (which, ls). Nil without `.readsProject`.
+    func readOnlyArguments(prompt: String) -> [String]?
 
     /// The shell line that logs in, run in a terminal since logins ask questions and open the browser.
     var loginCommand: String? { get }
@@ -151,7 +157,7 @@ public struct ClaudeCode: CodingAgent {
         let home = NSHomeDirectory()
         return ["\(home)/.local/bin", "\(home)/.claude/local"]
     }
-    public let capabilities: Set<AgentCapability> = [.initialPrompt, .headless, .background, .skills, .browser, .usage, .selfUpdate]
+    public let capabilities: Set<AgentCapability> = [.initialPrompt, .headless, .readsProject, .background, .skills, .browser, .usage, .selfUpdate]
     @MainActor public var logo: NSImage { Logo.claude }
     @MainActor public var tint: Color { Color(red: 0.85, green: 0.47, blue: 0.34) }
 
@@ -162,6 +168,13 @@ public struct ClaudeCode: CodingAgent {
     /// Haiku, no tools and no saved session: it only has to read the prompt and answer.
     public func headlessArguments(prompt: String) -> [String]? {
         ["-p", prompt, "--model", "haiku", "--tools", "", "--no-session-persistence"]
+    }
+
+    /// Sonnet, with the reading tools and Bash only for `which` and `ls`: in print mode a tool that isn't
+    /// allowed is refused rather than asked about, so nothing can be installed, run or changed.
+    public func readOnlyArguments(prompt: String) -> [String]? {
+        ["-p", prompt, "--model", "sonnet", "--tools", "Read,Glob,Grep,Bash",
+         "--allowedTools", "Read,Glob,Grep,Bash(which:*),Bash(ls:*)", "--no-session-persistence"]
     }
 
     public let loginCommand: String? = "claude auth login"
@@ -201,7 +214,7 @@ public struct Codex: CodingAgent {
     public let shortName = "Codex"
     public let commandName = "codex"
     public var extraSearchPaths: [String] { commonBins }
-    public let capabilities: Set<AgentCapability> = [.initialPrompt, .headless]
+    public let capabilities: Set<AgentCapability> = [.initialPrompt, .headless, .readsProject]
     @MainActor public var logo: NSImage { Logo.bundled("openai", fallback: "terminal") }
     @MainActor public var tint: Color { .primary }
 
@@ -213,6 +226,12 @@ public struct Codex: CodingAgent {
     /// `xhigh` for their own sessions, which made a commit message take minutes.
     public func headlessArguments(prompt: String) -> [String]? {
         ["exec", "--skip-git-repo-check", "--ephemeral", "--color", "never", "-c", "model_reasoning_effort=\"low\"", prompt]
+    }
+
+    /// The read-only sandbox, named rather than left to the user's config: its commands can look, not write.
+    public func readOnlyArguments(prompt: String) -> [String]? {
+        ["exec", "--skip-git-repo-check", "--ephemeral", "--color", "never", "--sandbox", "read-only",
+         "-c", "model_reasoning_effort=\"medium\"", prompt]
     }
 
     /// Logs out first: with a token that can't be refreshed Codex asks to "log out and sign in again",
@@ -300,7 +319,7 @@ public struct GeminiCLI: CodingAgent {
     public let shortName = "Gemini"
     public let commandName = "gemini"
     public var extraSearchPaths: [String] { commonBins }
-    public let capabilities: Set<AgentCapability> = [.initialPrompt, .headless]
+    public let capabilities: Set<AgentCapability> = [.initialPrompt, .headless, .readsProject]
     @MainActor public var logo: NSImage { Logo.bundled("googlegemini", fallback: "sparkle") }
     @MainActor public var tint: Color { Color(red: 0.26, green: 0.52, blue: 0.96) }
 
@@ -309,6 +328,12 @@ public struct GeminiCLI: CodingAgent {
     }
 
     public func headlessArguments(prompt: String) -> [String]? {
+        ["-p", prompt, "--output-format", "text"]
+    }
+
+    /// Without a terminal it has no one to ask, so the tools that need approval (shell, edits) aren't offered;
+    /// reading files and listing folders are.
+    public func readOnlyArguments(prompt: String) -> [String]? {
         ["-p", prompt, "--output-format", "text"]
     }
 
@@ -329,7 +354,7 @@ public struct CursorAgent: CodingAgent {
     public let shortName = "Cursor"
     public let commandName = "cursor-agent"
     public var extraSearchPaths: [String] { commonBins }
-    public let capabilities: Set<AgentCapability> = [.initialPrompt, .headless]
+    public let capabilities: Set<AgentCapability> = [.initialPrompt, .headless, .readsProject]
     @MainActor public var logo: NSImage { Logo.bundled("cursor", fallback: "cursorarrow") }
     @MainActor public var tint: Color { .primary }
 
@@ -338,6 +363,11 @@ public struct CursorAgent: CodingAgent {
     }
 
     public func headlessArguments(prompt: String) -> [String]? {
+        ["-p", prompt, "--output-format", "text", "--mode", "ask", "--trust"]
+    }
+
+    /// Ask mode reads the project and answers, without editing.
+    public func readOnlyArguments(prompt: String) -> [String]? {
         ["-p", prompt, "--output-format", "text", "--mode", "ask", "--trust"]
     }
 
@@ -359,7 +389,7 @@ public struct CopilotCLI: CodingAgent {
     public let shortName = "Copilot"
     public let commandName = "copilot"
     public var extraSearchPaths: [String] { commonBins }
-    public let capabilities: Set<AgentCapability> = [.initialPrompt, .headless]
+    public let capabilities: Set<AgentCapability> = [.initialPrompt, .headless, .readsProject]
     @MainActor public var logo: NSImage { Logo.bundled("githubcopilot", fallback: "person.2") }
     @MainActor public var tint: Color { .primary }
 
@@ -368,6 +398,11 @@ public struct CopilotCLI: CodingAgent {
     }
 
     public func headlessArguments(prompt: String) -> [String]? {
+        ["-p", prompt, "-s", "--no-ask-user"]
+    }
+
+    /// Reading the working directory needs no approval; anything that would (shell, edits) is denied without permission flags.
+    public func readOnlyArguments(prompt: String) -> [String]? {
         ["-p", prompt, "-s", "--no-ask-user"]
     }
 
@@ -395,6 +430,7 @@ public struct OpenCode: CodingAgent {
 
     public func interactiveCommand(prompt: String?, options: AgentOptions) -> String { commandName }
     public func headlessArguments(prompt: String) -> [String]? { nil }
+    public func readOnlyArguments(prompt: String) -> [String]? { nil }
 
     public let loginCommand: String? = "opencode auth login"
     public let installCommand: String? = "curl -fsSL https://opencode.ai/v2/install | bash"

@@ -90,6 +90,8 @@ final class Repository: ObservableObject, Identifiable {
     @Published private(set) var detectedStartCommand: String?
     /// The subfolder the detected command runs from, when the app isn't at the root.
     @Published private(set) var detectedStartFolder: String?
+    /// The detected app's build step, for one that has to be built before it starts (`DevWorkspace.StartPlan`).
+    @Published private(set) var detectedBuildCommand: String?
     /// What the project is built with (Nuxt, an Xcode app, Django ...), shown as a logo next to the name.
     @Published private(set) var framework: Framework?
     /// The app to start in a repository with several (three Next and three Nuxt apps, say), chosen by the user.
@@ -120,6 +122,10 @@ final class Repository: ObservableObject, Identifiable {
     /// What the play button runs: the user's own command, or the detected one.
     var startCommand: String? { customStart.map { DevWorkspace.announced($0.command) } ?? detectedStartCommand }
     var startsInTerminal: Bool { customStart?.inTerminal ?? false }
+    /// The build step before play, only for the detected command: a command of the user's own is run as it is.
+    var buildCommand: String? { customStart == nil ? detectedBuildCommand : nil }
+    /// Has to be built before the play button shows: the build button stands in its place.
+    var needsBuild: Bool { buildCommand != nil && !server.isBuilt }
     let server: DevServer
     /// A color to tell repositories apart at a glance, chosen by the user.
     @Published var color: RepoColor? {
@@ -339,14 +345,16 @@ final class Repository: ObservableObject, Identifiable {
         // can be slow on a big repository or a network disk, so it stays off the main thread.
         let root = path, folder = startFolder, files = status?.files.map(\.path) ?? []
         let detected = await Task.detached {
-            let start = DevWorkspace.start(in: root, webOnly: true, folder: folder)
+            let start = DevWorkspace.plan(in: root, webOnly: true, folder: folder)
             // An app in a subfolder (nuxt/frontend) has nothing at the root to go by.
             let framework = Framework.detect(projectAt: root) ?? start?.folder.flatMap { Framework.detect(projectAt: root + "/" + $0) }
-            return (command: start?.command, folder: start?.folder, framework: framework,
+            return (command: start?.command, folder: start?.folder, build: start?.build, isBuilt: start?.isBuilt ?? true, framework: framework,
                     stamp: Self.worktreeStamp(path: root, files: files, numstat: n.stdout))
         }.value
         if detected.command != detectedStartCommand { detectedStartCommand = detected.command }
         if detected.folder != detectedStartFolder { detectedStartFolder = detected.folder }
+        if detected.build != detectedBuildCommand { detectedBuildCommand = detected.build }
+        server.setBuilt(detected.isBuilt)
         if detected.framework != framework { framework = detected.framework }
 
         if let gitDir, lastFetched == nil {

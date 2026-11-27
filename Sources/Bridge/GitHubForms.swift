@@ -250,10 +250,8 @@ struct CloneRepositoryForm: View {
         .padding(12)
         .frame(width: isPage ? nil : 420)
         .frame(maxWidth: isPage ? .infinity : nil, alignment: .leading)
-        .onAppear {
-            folder = store.newProjectFolder
-            focus = host == nil ? "url" : "filter"
-        }
+        .onAppear { folder = store.newProjectFolder }
+        .focusesWhenShown { focus = host == nil ? "url" : "filter" }
         .onChange(of: source) {
             selected = nil
             focus = host == nil ? "url" : "filter"

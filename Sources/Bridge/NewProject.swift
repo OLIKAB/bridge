@@ -189,8 +189,8 @@ struct NewProjectForm: View {
         .onAppear {
             folder = store.newProjectFolder
             tools.look()
-            nameFocused = true
         }
+        .focusesWhenShown { nameFocused = true }
         .onChange(of: tools.packageManagers) {
             if !tools.packageManagers.contains(packageManager) { packageManager = tools.packageManagers[0] }
         }

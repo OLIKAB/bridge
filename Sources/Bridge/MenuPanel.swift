@@ -41,6 +41,10 @@ struct MenuPanel: View {
                     case .newProject: NewProjectForm(store: store, isPage: true, dismiss: closePage)
                     case .clone: CloneRepositoryForm(store: store, isPage: true, dismiss: closePage)
                     case .setup: SetupPage(done: closePage)
+                    case .startCommand(let path):
+                        if let repo = store.repos.first(where: { $0.path == path }) {
+                            StartCommandEditor(repo: repo, isPage: true, dismiss: closePage)
+                        }
                     }
                 }
                 .slidesIn(from: .trailing)
@@ -382,7 +386,8 @@ private struct RepoGroupHeader: View {
     var body: some View {
         let changed = section.items.filter(\.hasLocalWork).count
         let running = section.items.filter(\.server.isActive)
-        let startable = section.items.filter { !$0.isMissing && !$0.server.isActive && $0.startCommand != nil }
+        // Apps still to be built are left out: their build is a step of its own, from their row.
+        let startable = section.items.filter { !$0.isMissing && !$0.server.isActive && $0.startCommand != nil && !$0.needsBuild }
         GroupHeader(section: section.name, title: section.title, count: section.items.count, tab: .repos) {
             HStack(spacing: 8) {
                 RollingCount(value: changed) { Text("\(Image(systemName: "pencil")) \($0)") }
@@ -509,7 +514,6 @@ private struct RepoRow: View {
     private var isSuggesting: Bool { repo.isWritingCommitMessage }
     @State private var showNotes = false
     @State private var showSkillPicker = false
-    @State private var showStartEditor = false
     @State private var showBackgroundClaude = false
     @State private var showPublish = false
     @FocusState private var commitFocused: Bool
@@ -536,7 +540,12 @@ private struct RepoRow: View {
     /// Whether one of the row's popovers is open: the row then stays as it is under the pointer, buttons
     /// and highlight, so nothing moves while the popover points at it.
     private var hasPopover: Bool {
-        showNotes || showSkillPicker || showStartEditor || showBackgroundClaude || showPublish || showNewGroup
+        showNotes || showSkillPicker || showBackgroundClaude || showPublish || showNewGroup
+    }
+
+    /// The start command editor, as a page of the panel (`PanelPage.startCommand`).
+    private func editStart() {
+        PanelState.shared.open(.startCommand(path: repo.path))
     }
 
     /// Hovered, open, or with a popover open: shows the buttons, the star and the highlight.
@@ -574,9 +583,6 @@ private struct RepoRow: View {
                 }
                 .panelPopover(isPresented: $showSkillPicker, arrowEdge: .bottom) {
                     SkillPicker(repo: repo) { showSkillPicker = false }
-                }
-                .panelPopover(isPresented: $showStartEditor, arrowEdge: .bottom) {
-                    StartCommandEditor(repo: repo) { showStartEditor = false }
                 }
                 .panelPopover(isPresented: $showBackgroundClaude, arrowEdge: .bottom) {
                     BackgroundClaudeForm(repo: repo, prompt: store.pendingClaudePrompt) { showBackgroundClaude = false }
@@ -722,7 +728,7 @@ private struct RepoRow: View {
             if options.agent.can(.skills) {
                 Button("\(options.agent.name) skills…") { showSkillPicker = true }
             }
-            Button("Start command…") { showStartEditor = true }
+            Button("Start command…", action: editStart)
             Divider()
             Button("Copy path") {
                 Pasteboard.copy(repo.path)
@@ -890,8 +896,8 @@ private struct RepoRow: View {
                 }
             }
             if !repo.isMissing {
-                // No star here: it sits by the name (see `title`).
-                ServerControls(repo: repo)
+                // No star here: it sits by the name (see `title`). Its editor is a page of the panel.
+                ServerControls(repo: repo, editStart: editStart)
                 if isStartingSession {
                     // The first `claude --bg` can take a while to start Claude Code's service; without this nothing seems to happen.
                     ProgressView().controlSize(.small).frame(width: 24, height: 22)
@@ -1038,13 +1044,22 @@ private struct ServerBadge: View {
     @ViewBuilder private var content: some View {
         if let external = server.external {
             running(external.url)
+        } else if server.state == .running, server.url == nil {
+            // Grey until it answers: the green dot said "running" while the first install had minutes to go.
+            HStack(spacing: 4) {
+                Circle().fill(.tertiary).frame(width: 6, height: 6)
+                StartProgressLabel(server: server)
+            }
         } else if server.state == .running {
             running(server.url)
         } else if server.state == .stopping {
             Text("Stopping…")
         } else if case .exited(let code) = server.state, code != 0 {
-            Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.red)
+            HStack(spacing: 4) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+                if let failure = server.failure { Text(verbatim: failure.summary) }
+            }
         }
     }
 
@@ -1591,11 +1606,20 @@ struct ServerControls: View {
     @ObservedObject var repo: Repository
     @ObservedObject var server: DevServer
     @State private var showEditor = false
+    /// Opens the start command editor somewhere else than in a popover on these buttons: in the panel it's a
+    /// page (`PanelPage.startCommand`). The buttons there fade out under a popover once the pointer moves
+    /// into it, and a popover over a fading view draws its fields black. The main window keeps the popover.
+    let editStart: (() -> Void)?
 
     /// The favorite star isn't here: in the panel it sits by the repository's name.
-    init(repo: Repository) {
+    init(repo: Repository, editStart: (() -> Void)? = nil) {
         self.repo = repo
         server = repo.server
+        self.editStart = editStart
+    }
+
+    private func openEditor() {
+        if let editStart { editStart() } else { showEditor = true }
     }
 
     var body: some View {
@@ -1605,7 +1629,7 @@ struct ServerControls: View {
         } else if let command = repo.startCommand {
             controls(command)
         } else {
-            IconButton(systemName: "play.fill", help: "No web app found. Choose a start command or script…") { showEditor = true }
+            IconButton(systemName: "play.fill", help: "No web app found. Choose a start command or script…", action: openEditor)
                 .opacity(0.45)
                 .panelPopover(isPresented: $showEditor, arrowEdge: .bottom) {
                     StartCommandEditor(repo: repo) { showEditor = false }
@@ -1617,21 +1641,49 @@ struct ServerControls: View {
         switch server.state {
         case .stopped, .exited:
             if case .exited(let code) = server.state, code != 0 {
-                IconButton(systemName: "exclamationmark.triangle", help: "The app stopped (exit code \(code)). Show its output", hoverTint: .red) {
+                // Bridge already reinstalled once on its own; this is for after the user fixed something, or a cause it missed.
+                if server.failure?.kind == .missingDependencies, server.canReinstall, !repo.startsInTerminal {
+                    Button("Reinstall") { server.start(command, reinstall: true) }
+                        .buttonStyle(.panelChip)
+                }
+                IconButton(systemName: "exclamationmark.triangle",
+                           help: "The app stopped (exit code \(code))\(server.failure.map { ": \($0.summary)" } ?? ""). Show its output",
+                           hoverTint: .red) {
                     server.showOutput()
                 }
             }
-            IconButton(systemName: "play.fill", help: repo.startsInTerminal ? "Run \(repo.customStart?.command ?? "") in Terminal" : "Start \(repo.customStart == nil ? repo.detectedStartFolder ?? "the app" : "the app") in the background", hoverTint: .green) {
-                if repo.startsInTerminal { DevWorkspace.runInTerminal(command, in: repo.path) } else { server.start(command) }
+            Group {
+                // An app that has to be compiled first gets the build button in play's place, and play once it's built:
+                // the first compile (minutes for Rust or Spring) is then its own step with its own progress.
+                if repo.needsBuild, let build = repo.buildCommand {
+                    IconButton(systemName: "hammer.fill", help: "Build \(repo.detectedStartFolder ?? "the app") first\nIt can start once it's built", hoverTint: .orange) {
+                        server.build(build)
+                    }
+                } else {
+                    IconButton(systemName: "play.fill", help: repo.startsInTerminal ? "Run \(repo.customStart?.command ?? "") in Terminal" : "Start \(repo.customStart == nil ? repo.detectedStartFolder ?? "the app" : "the app") in the background", hoverTint: .green) {
+                        if repo.startsInTerminal { DevWorkspace.runInTerminal(command, in: repo.path) } else { server.start(command) }
+                    }
+                }
             }
-            .contextMenu { Button("Start command…") { showEditor = true } }
+            .contextMenu {
+                if let build = repo.buildCommand, !repo.needsBuild {
+                    Button("Build again") { server.build(build) }
+                }
+                Button("Start command…", action: openEditor)
+            }
             .panelPopover(isPresented: $showEditor, arrowEdge: .bottom) {
                 StartCommandEditor(repo: repo) { showEditor = false }
             }
         case .running, .stopping:
-            address(server.url, pending: server.state == .stopping ? "Stopping…" : "Starting…")
+            if server.state == .running, server.url == nil {
+                StartProgressLabel(server: server, showsTime: true)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else {
+                address(server.url, pending: "Stopping…")
+            }
             // Output sits behind a right-click, like the log in the Servers tab, to keep the row short.
-            IconButton(systemName: "stop.fill", help: "Stop (right-click to show output)", hoverTint: .red) { server.stop() }
+            IconButton(systemName: "stop.fill", help: server.isBuilding ? "Stop the build (right-click to show output)" : "Stop (right-click to show output)", hoverTint: .red) { server.stop() }
                 .contextMenu { Button("Show output") { server.showOutput() } }
         }
     }
@@ -1649,6 +1701,32 @@ struct ServerControls: View {
     /// http://localhost:5173/ → localhost:5173
     private static func label(_ url: URL) -> String {
         url.port.map { "\(url.host ?? "localhost"):\($0)" } ?? url.host ?? url.absoluteString
+    }
+}
+
+/// What a starting server is doing ("Installing…", "Building 42%"), from its output, and with `showsTime` how
+/// long it has been at it once that passes a few seconds, so a first start that installs for minutes is seen
+/// to be moving. Only this small view ticks, once a second, and only while the server starts.
+struct StartProgressLabel: View {
+    @ObservedObject var server: DevServer
+    var showsTime = false
+
+    var body: some View {
+        let phase = server.phase ?? "Starting…"
+        if showsTime {
+            TimelineView(.periodic(from: server.startedAt, by: 1)) { context in
+                let seconds = Int(context.date.timeIntervalSince(server.startedAt))
+                Text(verbatim: seconds < 5 ? phase : "\(phase) \(Self.duration(seconds))")
+                    .monospacedDigit()
+            }
+        } else {
+            Text(verbatim: phase)
+        }
+    }
+
+    /// 42 s, 1:05, 12:30.
+    static func duration(_ seconds: Int) -> String {
+        seconds < 60 ? "\(seconds) s" : String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 }
 
@@ -1735,22 +1813,30 @@ extension View {
     /// Claude writes, the field itself says so in shimmering grey. An icon beside the field (sparkles)
     /// looked out of place among the panel's plain controls, and wasn't clear about what it did.
     /// Apply to the text field, before `panelField`, so both line up with its text.
-    func claudeWrites(isEmpty: Bool, isWriting: Bool, enabled: Bool = true, action: @escaping () -> Void) -> some View {
-        modifier(ClaudeWrites(isEmpty: isEmpty, isWriting: isWriting, enabled: enabled, action: action))
+    /// The same for other fields the agent fills in (the start command), with their own words: `verb` for the
+    /// hint ("Find" → "Find with Claude ⇥"), `working` for the shimmer ("is looking through the project…"),
+    /// and the capability the agent needs for it.
+    func claudeWrites(isEmpty: Bool, isWriting: Bool, enabled: Bool = true, verb: String = "Write", working: String = "is writing…",
+                      needs capability: AgentCapability = .headless, action: @escaping () -> Void) -> some View {
+        modifier(ClaudeWrites(isEmpty: isEmpty, isWriting: isWriting, enabled: enabled, verb: verb, working: working,
+                              capability: capability, action: action))
     }
 }
 
-/// Only for agents that answer without a terminal (`.headless`); with another one the field is a plain
+/// Only for agents that can do it (`.headless` for a commit message); with another one the field is a plain
 /// field. Observes `AgentStatus`, which changes only when the agent does.
 private struct ClaudeWrites: ViewModifier {
     let isEmpty: Bool
     let isWriting: Bool
     let enabled: Bool
+    let verb: String
+    let working: String
+    let capability: AgentCapability
     let action: () -> Void
     @State private var hovering = false
     @ObservedObject private var agent = AgentStatus.shared
 
-    private var canWrite: Bool { enabled && agent.info.can(.headless) }
+    private var canWrite: Bool { enabled && agent.info.can(capability) }
 
     func body(content: Content) -> some View {
         // Inside the field's border, at its end, only while the field is empty, so it never runs into
@@ -1758,7 +1844,7 @@ private struct ClaudeWrites: ViewModifier {
         content
             .overlay(alignment: .leading) {
                 if isWriting && isEmpty {
-                    ShimmerText("\(agent.info.name) is writing…")
+                    ShimmerText("\(agent.info.name) \(working)")
                         .padding(.leading, PanelMetrics.fieldTextInset)
                         .allowsHitTesting(false)
                 }
@@ -1766,9 +1852,12 @@ private struct ClaudeWrites: ViewModifier {
             .overlay(alignment: .trailing) {
                 if isEmpty && !isWriting && canWrite {
                     Button(action: action) {
-                        Text("Write with \(agent.info.name) \(Image(systemName: "arrow.right.to.line"))")
+                        // The field's own placeholder color, as the prompt's suggestion has, not `.tertiary`: on a
+                        // page of the panel, straight on its glass, the tertiary style blended into the field and
+                        // the hint couldn't be seen, though it was there and worked.
+                        Text("\(verb) with \(agent.info.name) \(Image(systemName: "arrow.right.to.line"))")
                             .font(.caption)
-                            .foregroundStyle(hovering ? .secondary : .tertiary)
+                            .foregroundStyle(Color(nsColor: hovering ? .secondaryLabelColor : .placeholderTextColor))
                     }
                     .buttonStyle(.plain)
                     .fixedSize()

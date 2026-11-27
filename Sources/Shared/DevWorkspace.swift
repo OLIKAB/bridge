@@ -82,12 +82,56 @@ public enum DevWorkspace {
     /// its root, like a repo with the app in `nuxt/frontend`, gets the nearest subfolder that has one.
     /// `folder` is the user's pick among several apps; it's ignored once that folder no longer has a command.
     public static func start(in path: String, webOnly: Bool = false, folder: String? = nil) -> (folder: String?, command: String)? {
-        if let folder, !folder.isEmpty, let command = startCommand(atRoot: (path as NSString).appendingPathComponent(folder), repoRoot: path, webOnly: true) {
-            return (folder, "cd \(quoted(folder)) && \(command)")
+        plan(in: path, webOnly: webOnly, folder: folder).map { ($0.folder, $0.command) }
+    }
+
+    /// How to start a project, and for one that has to be built before it can start (a Rust or Spring server,
+    /// a Node app whose `start` serves `dist/`) the command that builds it and whether that was done.
+    public struct StartPlan: Equatable, Sendable {
+        /// The subfolder the app is in, nil for the root.
+        public let folder: String?
+        public let command: String
+        /// Runs from the same folder as `command`, with the same install check before it.
+        public let build: String?
+        /// Whether what `build` makes is there. Always true without a build step.
+        public let isBuilt: Bool
+    }
+
+    /// `start(in:)` with the build step (`StartPlan`).
+    public static func plan(in path: String, webOnly: Bool = false, folder: String? = nil) -> StartPlan? {
+        func plan(_ folder: String?, _ app: App) -> StartPlan {
+            let root = folder.map { (path as NSString).appendingPathComponent($0) } ?? path
+            let cd = folder.map { "cd \(quoted($0)) && " } ?? ""
+            return StartPlan(folder: folder, command: cd + app.command, build: app.build.map { cd + $0 },
+                             isBuilt: app.build == nil || isBuilt(app.outputs, in: root, repoRoot: path))
         }
-        if let command = startCommand(atRoot: path, repoRoot: path, webOnly: webOnly) { return (nil, command) }
-        guard let app = appFolders(in: path, stopAtFirstLevel: true).first else { return nil }
-        return (app.folder, "cd \(quoted(app.folder)) && \(app.command)")
+        if let folder, !folder.isEmpty, let app = app(atRoot: (path as NSString).appendingPathComponent(folder), repoRoot: path, webOnly: true) {
+            return plan(folder, app)
+        }
+        if let app = app(atRoot: path, repoRoot: path, webOnly: webOnly) { return plan(nil, app) }
+        guard let found = appFolders(in: path, stopAtFirstLevel: true).first,
+              let app = app(atRoot: (path as NSString).appendingPathComponent(found.folder), repoRoot: path, webOnly: true) else { return nil }
+        return plan(found.folder, app)
+    }
+
+    /// A build's output in the app's folder or one above it in the repository (a Cargo workspace keeps `target` at its root).
+    private static func isBuilt(_ outputs: [String], in folder: String, repoRoot: String) -> Bool {
+        let fm = FileManager.default
+        var folder = (folder as NSString).standardizingPath
+        let root = (repoRoot as NSString).standardizingPath
+        while true {
+            if outputs.contains(where: { fm.fileExists(atPath: (folder as NSString).appendingPathComponent($0)) }) { return true }
+            guard folder.hasPrefix(root + "/") else { return false }
+            folder = (folder as NSString).deletingLastPathComponent
+        }
+    }
+
+    /// What a folder's app is started with, and built with when it has to be built first: `outputs` are the
+    /// folders the build makes, any of which counts as built.
+    private struct App {
+        var command: String
+        var build: String?
+        var outputs: [String] = []
     }
 
     /// Subfolders (a few levels down) with a dev command we recognize, for repos with several apps.
@@ -96,7 +140,8 @@ public enum DevWorkspace {
     /// `stopAtFirstLevel` ends the search at the first level with a match, when only the best one is needed.
     public static func appFolders(in path: String, maxDepth: Int = 3, stopAtFirstLevel: Bool = false) -> [(folder: String, command: String)] {
         let fm = FileManager.default
-        let skipped: Set<String> = ["node_modules", "vendor", "dist", "build", "out", "target", "venv", "env", "__pycache__", "Pods", "DerivedData"]
+        let skipped: Set<String> = ["node_modules", "vendor", "dist", "build", "out", "target", "venv", "env", "__pycache__", "Pods", "DerivedData",
+                                    "bin", "obj", "_build", "deps"]
         let preferred = ["frontend", "web", "app", "client", "site", "www"]
         func rank(_ folder: String) -> Int { preferred.firstIndex(of: (folder as NSString).lastPathComponent.lowercased()) ?? preferred.count }
         var apps: [(folder: String, command: String)] = []
@@ -125,10 +170,15 @@ public enum DevWorkspace {
         return apps
     }
 
-    /// `repoRoot` is the folder the search started from: an app in a subfolder may be installed from there (workspaces).
     private static func startCommand(atRoot path: String, repoRoot: String, webOnly: Bool) -> String? {
+        app(atRoot: path, repoRoot: repoRoot, webOnly: webOnly)?.command
+    }
+
+    /// `repoRoot` is the folder the search started from: an app in a subfolder may be installed from there (workspaces).
+    private static func app(atRoot path: String, repoRoot: String, webOnly: Bool) -> App? {
         let fm = FileManager.default
         func has(_ name: String) -> Bool { fm.fileExists(atPath: (path as NSString).appendingPathComponent(name)) }
+        func text(_ name: String) -> String { (try? String(contentsOfFile: (path as NSString).appendingPathComponent(name), encoding: .utf8)) ?? "" }
 
         if let data = fm.contents(atPath: (path as NSString).appendingPathComponent("package.json")),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -140,23 +190,163 @@ public enum DevWorkspace {
             // In a workspace the lockfile and node_modules are in an ancestor folder; the install runs from there
             // (in a subshell, so the start command still runs in the app's folder).
             let up = setup.levelsUp == 0 ? "" : String(repeating: "../", count: setup.levelsUp)
-            let installIn = setup.levelsUp == 0 ? "\(manager) install" : "(cd \(up) && \(manager) install)"
+            // pnpm 11 and later stop the install on dependencies' build scripts it wasn't told to allow (esbuild's, in
+            // every Vite project); as a warning again, the install finishes and the scripts still don't run.
+            // On a reinstall, pnpm, bun and yarn 1 have to be told to look at node_modules: they trust their own
+            // record of the last install and answer "Already up to date" over a package that's gone. npm looks anyway.
+            let force = "${\(reinstallVariable):+\(manager == "yarn" ? (setup.berry ? "" : "--check-files") : "--force")}"
+            let installCommand = switch manager {
+            case "pnpm": "pnpm install --config.strict-dep-builds=false \(force)"
+            case "npm": "npm install"
+            case "yarn" where setup.berry: "yarn install"
+            default: "\(manager) install \(force)"
+            }
+            let installIn = setup.levelsUp == 0 ? installCommand : "(cd \(up) && \(installCommand))"
             let install = "\(say("Dependencies are missing or out of date, running \(manager) install (this can take a minute)…")) && \(installIn)"
             let current = dependenciesCurrent(manager: manager, berry: setup.berry, prefix: up, appPackageJSON: setup.levelsUp > 0,
                                               has: { fm.fileExists(atPath: (setup.folder as NSString).appendingPathComponent($0)) })
-            return "{ \(current) || { \(install); }; } && \(say(run)) && \(run)"
+            let versionFile = [path, setup.folder].contains { folder in
+                [".nvmrc", ".node-version"].contains { fm.fileExists(atPath: (folder as NSString).appendingPathComponent($0)) }
+            }
+            let prepare = (versionFile ? nodeVersion + " && " : "") + packageManagerFallback(manager) + unlessReinstalling(current, else: install) + " && "
+            var app = App(command: prepare + announced(run))
+            // A `start` that serves what `build` made (next start, node dist/server.js) fails on a fresh clone with
+            // "Cannot find module", which no install fixes. A `start` that is a dev server itself (react-scripts start) has no build step.
+            if script != "dev", scripts["build"] != nil, let outputs = nodeOutputs(serving: scripts[script] as? String ?? "") {
+                app.build = prepare + announced(manager == "yarn" ? "yarn build" : "\(manager) run build")
+                app.outputs = outputs
+            }
+            return app
         }
-        let command: String? =
-            has("manage.py") ? "python3 manage.py runserver"
-            : has("bin/rails") ? "bin/rails server"
-            : has("artisan") ? "php artisan serve"
-            : has("docker-compose.yml") || has("compose.yaml") || has("compose.yml") ? "docker compose up"
-            : webOnly ? nil
-            : has("Cargo.toml") ? "cargo run"
-            : has("go.mod") ? "go run ."
-            : has("Package.swift") ? "swift run"
-            : nil
-        return command.map { "\(say($0)) && \($0)" }
+        if has("manage.py") {
+            let python = pythonSetup(in: path)
+            return App(command: python.setup + announced("\(python.run) manage.py runserver"))
+        }
+        if has("bin/rails") {
+            let bundle = has("Gemfile") ? unlessReinstalling("bundle check >/dev/null 2>&1",
+                                                            else: "\(say("Gems are missing or out of date, running bundle install…")) && bundle install") + " && " : ""
+            return App(command: bundle + announced("bin/rails server"))
+        }
+        if has("artisan") {
+            var setup = ""
+            if has("composer.json") {
+                let lockCovered = has("composer.lock") ? " && [ $(stat -f %m composer.lock) -le $(stat -f %m vendor/composer/installed.json) ]" : ""
+                setup += unlessReinstalling("{ [ -e vendor/autoload.php ]\(lockCovered); }",
+                                            else: "\(say("Dependencies are missing or out of date, running composer install…")) && composer install") + " && "
+            }
+            // Laravel answers every request with an error until there's a .env with an APP_KEY; its README's first steps.
+            if has(".env.example") {
+                setup += "{ [ -e .env ] || { \(say("Creating .env from .env.example")) && cp .env.example .env && php artisan key:generate; }; } && "
+            }
+            return App(command: setup + announced("php artisan serve"))
+        }
+        // Compiled servers, before compose: their compose file is usually the database beside them, not the app.
+        // Each tool fetches its dependencies and compiles as part of running; the build step only does that
+        // without starting, so the first long compile is something the user asked for and watched, not a stuck start.
+        if has("mix.exs"), text("mix.exs").contains(":phoenix") {
+            let deps = "mix deps.get && "
+            return App(command: deps + announced("mix phx.server"), build: deps + announced("mix compile"), outputs: ["_build/dev"])
+        }
+        if has("pom.xml"), text("pom.xml").contains("spring-boot") {
+            let maven = has("mvnw") ? "sh ./mvnw" : "mvn"
+            return App(command: announced("\(maven) spring-boot:run"), build: announced("\(maven) compile"), outputs: ["target/classes"])
+        }
+        if let gradle = ["build.gradle.kts", "build.gradle"].first(where: has).map(text),
+           let task = gradle.contains("org.springframework.boot") ? "bootRun" : gradle.contains("io.ktor") ? "run" : nil {
+            let wrapper = has("gradlew") ? "sh ./gradlew" : "gradle"
+            return App(command: announced("\(wrapper) \(task)"), build: announced("\(wrapper) classes"), outputs: ["build/classes"])
+        }
+        if let project = ((try? fm.contentsOfDirectory(atPath: path)) ?? []).first(where: { $0.hasSuffix(".csproj") }),
+           text(project).contains("Microsoft.NET.Sdk.Web") {
+            return App(command: announced("dotnet run"), build: announced("dotnet build"), outputs: ["bin/Debug"])
+        }
+        let cargo = has("Cargo.toml") ? text("Cargo.toml") : nil
+        if let cargo, !webOnly || cargo.range(of: #"(?m)^\s*(axum|actix-web|rocket|warp|poem|leptos|salvo|tide|loco-rs)\s*="#, options: .regularExpression) != nil {
+            return App(command: announced("cargo run"), build: announced("cargo build"), outputs: ["target/debug"])
+        }
+        let swiftPackage = has("Package.swift") ? text("Package.swift") : nil
+        if let swiftPackage, !webOnly || ["vapor/vapor", "hummingbird-project/hummingbird"].contains(where: swiftPackage.contains) {
+            return App(command: announced("swift run"), build: announced("swift build"), outputs: [".build/debug"])
+        }
+        // Go compiles in seconds and keeps no build folder to tell a build by, so it starts without a build step.
+        if has("go.mod"), !webOnly
+            || ["gin-gonic/gin", "labstack/echo", "gofiber/fiber", "go-chi/chi", "gorilla/mux", "beego"].contains(where: text("go.mod").contains)
+            || text("main.go").contains("ListenAndServe") {
+            return App(command: announced("go run ."))
+        }
+        if has("docker-compose.yml") || has("compose.yaml") || has("compose.yml") {
+            return App(command: dockerRunning + " && " + announced("docker compose up"))
+        }
+        return nil
+    }
+
+    /// What a Node app's `start` script serves, when it's a build's output rather than a dev server:
+    /// nil for "vite", "react-scripts start", "nodemon src" and the like, which need no build first.
+    private static func nodeOutputs(serving script: String) -> [String]? {
+        let script = script.lowercased()
+        if script.contains("next start") { return [".next"] }
+        if script.contains("nuxt start") || script.contains("nuxt preview") || script.contains(".output/") { return [".output"] }
+        if script.contains("vite preview") || script.contains("astro preview") { return ["dist"] }
+        if script.contains("remix-serve") || script.contains("react-router-serve") { return ["build"] }
+        if script.contains("ng serve") || script.contains("--watch") { return nil }
+        // node dist/index.js, serve -s build, http-server ./out
+        guard let range = script.range(of: #"(^|[\s/'"])(dist|build|out|lib)/"#, options: .regularExpression)
+                ?? script.range(of: #"\s(\./)?(dist|build|out)(\s|$)"#, options: .regularExpression) else { return nil }
+        let folder = script[range].trimmingCharacters(in: CharacterSet(charactersIn: " ./'\""))
+        return [folder]
+    }
+
+    /// The environment variable that makes a start command install its dependencies even when they look current.
+    /// Bridge sets it to try again after a start failed on something missing (`DevServer.start(_:reinstall:)`);
+    /// its presence in a command also says the command knows how to install.
+    public static let reinstallVariable = "BRIDGE_REINSTALL"
+
+    /// `check` decides whether `install` is needed, unless a reinstall was asked for.
+    private static func unlessReinstalling(_ check: String, else install: String) -> String {
+        "{ { [ -z \"$\(reinstallVariable)\" ] && \(check); } || { \(install); }; }"
+    }
+
+    /// Switches to the Node version a project names in .nvmrc or .node-version, installing it if needed, with fnm
+    /// or nvm. Both are usually set up in .zshrc, which a login shell running a command doesn't read, so the
+    /// project got whatever Node was first on the path. Without either, nothing changes.
+    private static let nodeVersion = """
+        { if command -v fnm >/dev/null; then eval "$(fnm env --shell zsh)" && fnm use --install-if-missing --silent-if-unchanged; \
+        elif [ -s "${NVM_DIR:-$HOME/.nvm}/nvm.sh" ]; then . "${NVM_DIR:-$HOME/.nvm}/nvm.sh" && { nvm use >/dev/null 2>&1 || nvm install; }; \
+        fi; true; }
+        """
+
+    /// A project on pnpm, yarn or bun shouldn't need it installed first: without it, the command goes through
+    /// Corepack (which comes with Node and fetches the version package.json asks for), or npx where it's gone.
+    private static func packageManagerFallback(_ manager: String) -> String {
+        guard manager != "npm" else { return "" }
+        return "{ command -v \(manager) >/dev/null || \(manager)() { if command -v corepack >/dev/null; then COREPACK_ENABLE_DOWNLOAD_PROMPT=0 corepack \(manager) \"$@\"; else npx --yes \(manager) \"$@\"; fi; }; } && "
+    }
+
+    /// Docker Desktop opened and waited for (up to two minutes) when it isn't running, rather than compose
+    /// failing at once with "Cannot connect to the Docker daemon".
+    private static let dockerRunning = """
+        { docker info >/dev/null 2>&1 || { open -ga Docker 2>/dev/null; \(say("Waiting for Docker to start…")); \
+        n=0; until docker info >/dev/null 2>&1 || [ $n -ge 120 ]; do sleep 1; n=$((n+1)); done; }; }
+        """
+
+    /// How a Django project's Python is set up and run: uv and Poetry install from their lockfiles themselves;
+    /// a requirements.txt gets a virtual environment (the project's own .venv or venv, or a new .venv) with the
+    /// requirements installed whenever they're newer than the last install. Anything else runs on an existing
+    /// virtual environment, or the system's python3.
+    private static func pythonSetup(in path: String) -> (setup: String, run: String) {
+        let fm = FileManager.default
+        func has(_ name: String) -> Bool { fm.fileExists(atPath: (path as NSString).appendingPathComponent(name)) }
+        if has("uv.lock") { return ("", "uv run python") }
+        if has("poetry.lock") { return ("poetry install --quiet && ", "poetry run python") }
+        let venv = [".venv", "venv"].first { has("\($0)/pyvenv.cfg") }
+        guard has("requirements.txt") else { return ("", venv.map { "\($0)/bin/python" } ?? "python3") }
+        let env = venv ?? ".venv"
+        let marker = "\(env)/.bridge-installed"
+        // A virtual environment points at the Python it was made with, which a Homebrew upgrade can remove.
+        let works = "{ [ -x \(env)/bin/python ] && \(env)/bin/python -c '' 2>/dev/null; }"
+        let current = "{ \(works) && [ -e \(marker) ] && [ $(stat -f %m requirements.txt) -le $(stat -f %m \(marker)) ]; }"
+        let install = "\(say("Setting up \(env) and installing requirements.txt (this can take a minute)…")) && { \(works) || python3 -m venv --clear \(env); } && \(env)/bin/python -m pip install -r requirements.txt && touch \(marker)"
+        return (unlessReinstalling(current, else: install) + " && ", "\(env)/bin/python")
     }
 
     /// A shell test for whether node_modules is a finished install of the current package.json and lockfile.

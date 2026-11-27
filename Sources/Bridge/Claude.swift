@@ -154,10 +154,68 @@ enum Agent {
         guard let args = agent.headlessArguments(prompt: prompt) else {
             throw GitError(message: "\(agent.name) can't write commit messages from Bridge.")
         }
+        let output = try await run(executable, args, prompt: prompt, in: directory, timeout: 120)
+        let lines = output.components(separatedBy: "\n")
+        let summary = lines[0].trimmingCharacters(in: .whitespaces)
+        let description = lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return (summary, description)
+    }
 
+    /// What the agent found for starting a project: a command, or why there's none.
+    struct StartSuggestion: Equatable {
+        let command: String?
+        /// Interactive (prompts, a full-screen status) and so has to run in a terminal.
+        let inTerminal: Bool
+        /// One sentence: what the command does, or why nothing will start.
+        let reason: String
+    }
+
+    /// Has the agent look through the project and work out the command that starts it, read-only
+    /// (`readOnlyArguments`). `tried` is what Bridge would run and how its last start ended, so the agent
+    /// doesn't suggest the same thing again or can say why it fails.
+    static func findStartCommand(in directory: String, tried: String?) async throws -> StartSuggestion {
+        let agent = current
+        guard let executable else {
+            throw GitError(message: "Couldn't find the \(agent.commandName) command. Install \(agent.name) and run `\(agent.commandName)` once to log in.")
+        }
+        let prompt = """
+            Look through the project in the current directory and work out the one shell command that starts it \
+            for local development (its dev server, or the app itself if it isn't a web app). \
+            Read the README, package and build files and scripts; use `which` to check that the tools it needs are installed.
+
+            The command runs from this directory in a fresh, non-interactive zsh login shell, with its output going to a log file. \
+            If it needs dependencies installed first, include that step with && (like `npm install && npm run dev`). \
+            If the app is in a subfolder, start with `cd <folder> &&`. Never use sudo, never delete anything, \
+            and don't include steps that need secrets or accounts the project doesn't already have.
+
+            If nothing can start it on this machine (a tool it needs isn't installed, it's a library with nothing to run, \
+            it needs credentials that aren't there), give no command and say why, with what would fix it.
+            \(tried.map { "\nBridge already tried this, and it didn't work:\n\($0)\n" } ?? "")
+            Reply with only a JSON object, no Markdown fences and nothing else:
+            {"command": "<the command, or null>", "terminal": <true only if it asks questions or draws a full-screen interface>, \
+            "reason": "<one short sentence in English: what it starts, or why nothing can>"}
+            """
+        guard let args = agent.readOnlyArguments(prompt: prompt) else {
+            throw GitError(message: "\(agent.name) can't look through projects from Bridge.")
+        }
+        let output = try await run(executable, args, prompt: prompt, in: directory, timeout: 300)
+        // The object, wherever it is: some agents add a line before it or fence it anyway.
+        guard let start = output.firstIndex(of: "{"), let end = output.lastIndex(of: "}"), start < end,
+              let json = try? JSONSerialization.jsonObject(with: Data(output[start...end].utf8)) as? [String: Any] else {
+            throw GitError(message: "\(agent.shortName) didn't answer with a command: \(output.prefix(200))")
+        }
+        let command = (json["command"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return StartSuggestion(command: command?.isEmpty == false ? command : nil, inTerminal: json["terminal"] as? Bool ?? false,
+                               reason: (json["reason"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+    }
+
+    /// Runs the agent without a terminal and returns what it printed, or throws what went wrong in words
+    /// (a login problem as `AgentLoginError`).
+    private static func run(_ executable: String, _ args: [String], prompt: String, in directory: String, timeout: TimeInterval) async throws -> String {
+        let agent = current
         let result = await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(returning: Git.runSync(executable, args, in: directory, environment: Git.environment, timeout: 120))
+                continuation.resume(returning: Git.runSync(executable, args, in: directory, environment: Git.environment, timeout: timeout))
             }
         }
         let output = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -174,11 +232,7 @@ enum Agent {
             let message = said.map(readable).first { !$0.isEmpty }
             throw GitError(message: message ?? "\(agent.commandName) failed (exit code \(result.status))")
         }
-
-        let lines = output.components(separatedBy: "\n")
-        let summary = lines[0].trimmingCharacters(in: .whitespaces)
-        let description = lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
-        return (summary, description)
+        return output
     }
 
     /// An agent's error output as something to read: without its log lines' timestamps, levels and

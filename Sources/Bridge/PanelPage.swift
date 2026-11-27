@@ -6,12 +6,31 @@ import SwiftUI
 /// is a window over a window: it could open off screen, and Esc and focus went to the wrong one.
 enum PanelPage: Hashable {
     case newProject, clone, setup
+    /// How the repository at `path` is started (`StartCommandEditor`). A page rather than a popover on its
+    /// row: a field in a popover is drawn dark, unlike the panel's on its glass, and the form had grown
+    /// (apps, scripts, the agent's search) past what a popover holds well.
+    case startCommand(path: String)
 
     var title: String {
         switch self {
         case .newProject: "New project"
         case .clone: "Clone repository"
         case .setup: "Set up Bridge"
+        // The repository's name, as the page is about that one and says so nowhere else.
+        case .startCommand(let path): "Start \((path as NSString).lastPathComponent)"
+        }
+    }
+}
+
+extension View {
+    /// Gives a page's field the keyboard as the page comes up, so typing starts there without a click.
+    /// A moment after it appears rather than in `onAppear`: pages open from a menu (+, a row's right-click
+    /// menu), and as a menu closes macOS gives the keyboard back to the view that had it, the panel's
+    /// prompt field, which undid a focus set in `onAppear`.
+    func focusesWhenShown(_ focus: @escaping @MainActor () -> Void) -> some View {
+        task {
+            try? await Task.sleep(for: .milliseconds(80))
+            focus()
         }
     }
 }
