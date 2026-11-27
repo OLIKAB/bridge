@@ -1,0 +1,13 @@
+name = "bridge-usage"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+
+# Delete pings older than about 13 months once a day.
+[triggers]
+crons = ["17 3 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "bridge-usage"
+# Filled in by `npx wrangler d1 create bridge-usage` (see README.md).
+database_id = "bcc5343f-702e-4fb8-988d-1e769b0fb0d8"

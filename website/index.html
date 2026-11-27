@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bridge</title>
+<meta name="description" content="Your repos, servers and agents, in the macOS menu bar.">
+<meta property="og:title" content="Bridge">
+<meta property="og:description" content="Your repos, servers and agents, in the macOS menu bar.">
+<meta property="og:image" content="https://bridge.olikab.com/assets/og.jpg">
+<meta property="og:url" content="https://bridge.olikab.com/">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/favicon.png" sizes="32x32">
+<link rel="apple-touch-icon" href="assets/icon-256.png">
+<style>
+/* The page is set in the Mac's own font, SF Pro, as Bridge's panel is, so the line, the button and the
+   recording read as one. It can't be served, but on a Mac the browser takes it from the system. Elsewhere
+   Geist (variable, OFL, latin subset) stands in, served from here rather than Google's so a visit doesn't
+   hand the visitor's address to a third party; it isn't preloaded, so a Mac never downloads it. */
+@font-face { font-family: "Geist"; font-style: normal; font-weight: 100 900; font-display: swap; src: url(fonts/geist-latin.woff2) format("woff2") }
+
+/* One dark screen: a slow aurora in the knot's three colours, film grain over everything, what Bridge is in
+   one line, the download, and a recording of the real app as large as the screen's height allows, the whole
+   block centred so there is as much room above it as below. */
+:root {
+  color-scheme: dark;
+  --night: #050508; --ink: #f4f4f7; --soft: rgba(244,244,247,.56);
+  --violet: #9c8cff;
+  --text: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Geist", ui-sans-serif, sans-serif;
+  --display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Geist", ui-sans-serif, sans-serif;
+  --grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='220'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .6 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  /* The room above the line and below the recording: the same, and clear of the top bar. */
+  --gap: clamp(64px, 9vh, 96px);
+}
+* { box-sizing: border-box }
+html, body { height: 100% }
+html { background: #000 }
+/* A black frame round the whole page, the scene inside it with rounded corners, like a screen in its bezel. */
+body { margin: 0; padding: 12px; background: #000; color: var(--ink); font-family: var(--text); -webkit-font-smoothing: antialiased; overflow: hidden }
+p, h1 { margin: 0 }
+a { color: inherit; text-decoration: none }
+button { font: inherit; color: inherit }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--violet); outline-offset: 4px; border-radius: 4px }
+
+.scene { position: relative; height: 100%; min-height: 480px; overflow: hidden; isolation: isolate; border-radius: 22px; background: var(--night) }
+/* A hairline round the scene, above everything, so the frame stays visible where the aurora fades to black. */
+.scene::before { content: ""; position: absolute; inset: 0; z-index: 8; border-radius: inherit; border: 1px solid rgba(255,255,255,.11); pointer-events: none }
+#sky { position: absolute; inset: 0; width: 100%; height: 100%; z-index: -3; display: block }
+.scene::after { content: ""; position: absolute; inset: -50%; z-index: 4; background-image: var(--grain); opacity: .15; mix-blend-mode: overlay; pointer-events: none; animation: grain 1s steps(6) infinite }
+@keyframes grain { 0% { transform: translate(0, 0) } 20% { transform: translate(-3%, 2%) } 40% { transform: translate(2%, -4%) } 60% { transform: translate(-4%, -1%) } 80% { transform: translate(3%, 3%) } 100% { transform: translate(0, 0) } }
+
+.top { position: absolute; z-index: 6; top: 26px; left: 28px; right: 28px; display: flex; justify-content: space-between; align-items: center; font-weight: 500; font-size: 15px; letter-spacing: -0.01em }
+.mark { display: flex; align-items: center; gap: 9px; opacity: .9 }
+.mark svg { width: 20px; height: 20px }
+.top a.gh { font-size: 14px; color: var(--soft) }
+.top a.gh:hover { color: var(--ink) }
+
+/* Above the grain, so the button and the recording stay clean. A column: the pitch takes what it needs and the
+   recording the rest, with the same room above the line as below the recording. */
+.center { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column; align-items: center; padding: var(--gap) 28px; text-align: center }
+.line { font-family: var(--display); font-weight: 600; font-size: clamp(30px, min(4.4vw, 6.2vh), 60px); letter-spacing: -0.035em; line-height: 1.06 }
+.line span { display: block; text-wrap: balance }
+
+/* The download: a white pill with Apple's mark, lit from behind by the knot's three colours. */
+.download {
+  --glow: .35;
+  margin-top: clamp(20px, 4vh, 36px); display: inline-flex; align-items: center; gap: 10px; height: 52px; padding: 0 26px 0 22px;
+  border-radius: 99px; background: var(--ink); color: #08080b; font-weight: 500; font-size: 15.5px; letter-spacing: -0.01em;
+  box-shadow: inset 0 -1px 0 rgba(0,0,0,.12),
+    -14px 4px 32px -6px rgba(76,240,180,var(--glow)), 0 6px 32px -6px rgba(156,140,255,var(--glow)), 14px 4px 32px -6px rgba(255,160,112,var(--glow)),
+    0 18px 40px rgba(0,0,0,.45);
+  transition: transform .2s cubic-bezier(.2,.8,.2,1), background .2s, box-shadow .3s
+}
+.download:hover { --glow: .7; transform: translateY(-1px); background: #fff }
+.download:active { transform: translateY(0) scale(.98) }
+.download svg { width: 16px; height: 19px; margin-top: -3px }
+.meta { margin-top: 14px; font-size: 13px; color: rgba(244,244,247,.4) }
+.watch { border: 0; background: none; padding: 0; cursor: pointer; color: rgba(244,244,247,.62); text-decoration: underline; text-underline-offset: 3px; text-decoration-color: rgba(244,244,247,.25) }
+.watch:hover { color: var(--ink) }
+
+/* The recording fills the room left under the pitch, as large as fits in it at its own proportions, and never
+   larger than it was recorded (1240 px). The room is a size container, so the recording can size itself to it. */
+.stage { flex: 1 1 0; min-height: 0; width: 100%; margin-top: clamp(24px, 5vh, 48px); container-type: size; display: flex; justify-content: center }
+.demo { display: block; padding: 0; border: 0; background: none; cursor: pointer; border-radius: 16px;
+  width: min(100cqw, 100cqh * 1240 / 880, 1240px); aspect-ratio: 1240 / 880; align-self: flex-start;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.1), 0 40px 90px rgba(0,0,0,.6), 0 0 140px -40px rgba(156,140,255,.35);
+  transition: box-shadow .4s, transform .4s cubic-bezier(.2,.8,.2,1) }
+.demo:hover { box-shadow: 0 0 0 1px rgba(255,255,255,.18), 0 40px 90px rgba(0,0,0,.6), 0 0 160px -30px rgba(156,140,255,.5) }
+.demo video { display: block; width: 100%; height: 100%; border-radius: inherit; background: #111 }
+/* An entrance, once: the recording settles in after the line and the button. */
+.demo { animation: settle 1s cubic-bezier(.2,.8,.2,1) both .15s }
+@keyframes settle { from { opacity: 0; transform: translateY(14px) } }
+
+/* The whole demo, 36 seconds, over the page. */
+.lightbox { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 16px; background: rgba(3,3,6,.82); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); opacity: 0; pointer-events: none; transition: opacity .3s }
+.lightbox.open { opacity: 1; pointer-events: auto }
+.lightbox video { width: min(90vw, 1280px, calc((100vh - 120px) * 1.6)); border-radius: 14px; box-shadow: 0 0 0 1px rgba(255,255,255,.12), 0 40px 120px rgba(0,0,0,.7) }
+.lightbox .close { position: absolute; top: 24px; right: 28px; border: 0; background: none; font-size: 14px; color: var(--soft); cursor: pointer }
+
+/* Too little room for a recording worth seeing: the pitch alone, centred, and the demo behind its link. */
+@media (max-height: 560px) { .stage { display: none } .center { justify-content: center } }
+/* Tall, narrow screens: the recording is as wide as the column, and the whole block is centred instead. */
+@media (max-aspect-ratio: 4/5) { .center { justify-content: center } .stage { flex: 0 0 auto; container-type: normal } .demo { width: min(100%, 500px); aspect-ratio: 1000 / 808 } }
+@media (max-width: 600px) { body { padding: 8px } .scene { border-radius: 16px } .center { padding-left: 16px; padding-right: 16px } .demo { border-radius: 12px } }
+@media (prefers-reduced-motion: reduce) { .scene::after, .demo { animation: none } }
+</style>
+</head>
+<body>
+<div class="scene">
+  <canvas id="sky" aria-hidden="true"></canvas>
+  <!-- Each ring of the knot is cut where the ring that passes over it lies (A over B, B over C, C over A). -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+    <mask id="underC" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100"><rect width="100" height="100" fill="#fff"/><circle cx="59.5" cy="55.5" r="16" fill="none" stroke="#000" stroke-width="13.1"/></mask>
+    <mask id="underA" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100"><rect width="100" height="100" fill="#fff"/><circle cx="50" cy="39" r="16" fill="none" stroke="#000" stroke-width="13.1"/></mask>
+    <mask id="underB" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100"><rect width="100" height="100" fill="#fff"/><circle cx="40.5" cy="55.5" r="16" fill="none" stroke="#000" stroke-width="13.1"/></mask>
+  </defs></svg>
+
+  <header class="top">
+    <div class="mark">
+      <svg viewBox="19 16.25 62 62" aria-hidden="true"><g fill="none" stroke="#f4f4f6" stroke-width="7.5">
+        <circle cx="50" cy="39" r="16" mask="url(#underC)"/><circle cx="40.5" cy="55.5" r="16" mask="url(#underA)"/><circle cx="59.5" cy="55.5" r="16" mask="url(#underB)"/>
+      </g></svg>
+      Bridge
+    </div>
+    <a class="gh" href="https://github.com/OLIKAB/bridge">GitHub</a>
+  </header>
+
+  <main class="center">
+      <h1 class="line"><span>Your repos, servers and agents,</span> <span>in the menu bar.</span></h1>
+      <a class="download" id="download" href="/download"><svg viewBox="0 0 17 20" aria-hidden="true"><path fill="currentColor" d="M14.1 10.6c0-2.6 2.1-3.8 2.2-3.9-1.2-1.8-3.1-2-3.7-2-1.6-.2-3.1.9-3.9.9-.8 0-2-.9-3.4-.9C3.6 4.8 1.9 5.8 1 7.4c-1.9 3.3-.5 8.1 1.3 10.8.9 1.3 2 2.7 3.3 2.7 1.3-.1 1.8-.9 3.4-.9s2 .9 3.4.8c1.4 0 2.3-1.3 3.2-2.6 1-1.5 1.4-2.9 1.4-3-.1 0-2.8-1.1-2.9-4.6ZM11.6 3c.7-.9 1.2-2.1 1.1-3.3-1 0-2.3.7-3 1.6-.7.8-1.2 2-1.1 3.2 1.2.1 2.3-.6 3-1.5Z"/></svg>Download for Mac</a>
+      <p class="meta"><span id="meta">Free, for macOS 14 or later.</span> <button class="watch" id="watch">Watch the demo</button></p>
+      <div class="stage">
+        <!-- A click on the loop plays the whole demo. -->
+        <button class="demo" id="demo" aria-label="Watch the whole demo: Claude writes a commit message, the change is committed and pushed, and the dev server starts">
+          <!-- Tall, narrow screens get the panel alone, close enough to read; the browser picks by the media query. -->
+          <video id="loop" autoplay muted loop playsinline preload="auto" poster="assets/demo.jpg" aria-hidden="true">
+            <source src="assets/demo-mobile.webm" type="video/webm" media="(max-aspect-ratio: 4/5)">
+            <source src="assets/demo-mobile.mp4" type="video/mp4" media="(max-aspect-ratio: 4/5)">
+            <source src="assets/demo.webm" type="video/webm">
+            <source src="assets/demo.mp4" type="video/mp4">
+          </video>
+        </button>
+      </div>
+  </main>
+</div>
+
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Bridge demo">
+  <button class="close" id="close">Close</button>
+  <video id="full" controls playsinline preload="none" poster="assets/demo.jpg" src="assets/demo-full.mp4"></video>
+</div>
+
+<script>
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+sky();
+
+// With reduced motion the recording stays a still picture.
+const loop = document.getElementById('loop');
+// The poster that goes with the source the browser picked.
+if (matchMedia('(max-aspect-ratio: 4/5)').matches) loop.poster = 'assets/demo-mobile.jpg';
+if (reduce) { loop.removeAttribute('autoplay'); loop.pause() }
+
+// The whole demo in a lightbox, from the link or a click on the loop; Esc or a click outside closes it,
+// and focus goes back to what opened it. The loop pauses meanwhile.
+const box = document.getElementById('lightbox'), full = document.getElementById('full');
+let opener = null;
+const openBox = e => { opener = e.currentTarget; box.classList.add('open'); loop.pause(); full.currentTime = 0; full.play().catch(() => {}); document.getElementById('close').focus() };
+const shutBox = () => { box.classList.remove('open'); full.pause(); if (!reduce) loop.play().catch(() => {}); opener && opener.focus() };
+document.getElementById('watch').onclick = openBox;
+document.getElementById('demo').onclick = openBox;
+document.getElementById('close').onclick = shutBox;
+box.onclick = e => { if (e.target === box) shutBox() };
+addEventListener('keydown', e => { if (e.key === 'Escape' && box.classList.contains('open')) shutBox() });
+
+// Bridge only runs on a Mac. Elsewhere the button says so and leads to GitHub instead of a disk image
+// that can't be opened. "Macintosh" rather than "Mac OS X", which iPhones say too ("like Mac OS X");
+// iPads asking for the desktop site say Macintosh, but have a touch screen.
+const isMac = /Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints < 2;
+const download = document.getElementById('download'), meta = document.getElementById('meta');
+if (!isMac) {
+  download.href = 'https://github.com/OLIKAB/bridge';
+  download.lastChild.textContent = 'Bridge is for Mac';
+  meta.textContent = 'Open this page on your Mac to download it.';
+} else {
+  // The released version, so the page needn't change with every release.
+  fetch('https://bridge-usage.olikab.workers.dev/latest')
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d && d.version) meta.textContent = `Version ${d.version}, free, for macOS 14 or later.` })
+    .catch(() => {});
+}
+
+// Aurora in the knot's colours, with grain in the shader so the gradients never band.
+function sky() {
+  const canvas = document.getElementById('sky');
+  const gl = canvas.getContext('webgl', { antialias: false });
+  if (!gl) return;
+  const vs = 'attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}';
+  const fs = `precision highp float;
+uniform vec2 r;uniform float t;
+float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float n(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+ return mix(mix(h(i),h(i+vec2(1,0)),f.x),mix(h(i+vec2(0,1)),h(i+vec2(1,1)),f.x),f.y);}
+float fbm(vec2 p){float v=0.,a=.5;for(int i=0;i<5;i++){v+=a*n(p);p*=2.03;a*=.5;}return v;}
+void main(){
+ vec2 uv=gl_FragCoord.xy/r; float asp=r.x/r.y; vec2 q=vec2(uv.x*asp,uv.y);
+ vec3 col=mix(vec3(.012,.012,.02),vec3(.03,.025,.055),uv.y);
+ for(int i=0;i<3;i++){
+  float fi=float(i);
+  float x=q.x*.7+fi*1.91;
+  float base=.46+.1*fi+.08*sin(x*1.3+t*.05+fi*2.3)+.14*(fbm(vec2(x*.7,t*.02+fi))-.5);
+  float d=uv.y-base;
+  float edge=smoothstep(-.34,.04,d)*exp(-max(d,0.)*(2.6+fi*.5));
+  float streak=pow(fbm(vec2(x*6.,t*.08+fi*3.)),2.3)*2.4;
+  float a=edge*streak*(.5+.5*fbm(vec2(x*1.8,t*.04)));
+  vec3 c=fi<1.?vec3(.30,.94,.71):fi<2.?vec3(.61,.55,1.):vec3(1.,.63,.44);
+  col+=c*a*.42;
+ }
+ col+=vec3(.61,.55,1.)*.07*exp(-length((uv-vec2(.5,.45))*vec2(asp,1.))*2.6);
+ float v=smoothstep(1.2,.25,length((uv-vec2(.5,.5))*vec2(1.,1.15)));col*=.55+.45*v;
+ col+=vec3(.61,.55,1.)*.035*smoothstep(.35,0.,uv.y);
+ col+=(h(gl_FragCoord.xy+fract(t*7.)*91.)-.5)*.045;
+ gl_FragColor=vec4(col,1.);}`;
+  const sh = (type, src) => { const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); return s };
+  const pr = gl.createProgram();
+  gl.attachShader(pr, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(pr);
+  if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) return;
+  gl.useProgram(pr);
+  gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(pr, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  const ur = gl.getUniformLocation(pr, 'r'), ut = gl.getUniformLocation(pr, 't');
+  const size = () => { const d = Math.min(devicePixelRatio || 1, 1.5) * .7; canvas.width = canvas.clientWidth * d; canvas.height = canvas.clientHeight * d; gl.viewport(0, 0, canvas.width, canvas.height) };
+  size(); addEventListener('resize', size);
+  // The aurora moves too slowly for anyone to tell 30 frames a second from 60 or 120, so it draws at most 30,
+  // which halves (or quarters, on ProMotion screens) what it costs a laptop's battery.
+  const t0 = performance.now();
+  let last = -Infinity;
+  const frame = now => {
+    if (!reduce) requestAnimationFrame(frame);
+    if (now - last < 32) return;
+    last = now;
+    gl.uniform2f(ur, canvas.width, canvas.height);
+    gl.uniform1f(ut, reduce ? 30 : (now - t0) / 1000 + 30);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  };
+  requestAnimationFrame(frame);
+}
+</script>
+</body>
+</html>

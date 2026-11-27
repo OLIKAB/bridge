@@ -4,3 +4,6 @@ dist/
 *.app
 .DS_Store
 .swiftpm/
+.env
+telemetry/.wrangler/
+telemetry/node_modules/

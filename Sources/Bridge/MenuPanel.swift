@@ -1522,6 +1522,7 @@ struct SettingsMenu: View {
     @ObservedObject private var groups = RepoGroups.shared
     @ObservedObject private var agent = AgentStatus.shared
     @ObservedObject private var update = AppUpdate.shared
+    @ObservedObject private var usagePing = UsagePing.shared
 
     var body: some View {
         PanelMenu(help: "Settings") {
@@ -1573,6 +1574,9 @@ struct SettingsMenu: View {
             Toggle("Launch at login", isOn: $store.launchAtLogin)
             Toggle("Check for Bridge updates", isOn: $update.isEnabled)
             Button("Check for Bridge updates now") { update.check(byHand: true) }
+            if UsagePing.endpoint != nil {
+                Toggle("Send anonymous usage count", isOn: $usagePing.isEnabled)
+            }
             Divider()
             LicenseMenuItem()
             Button("Quit Bridge") { NSApp.terminate(nil) }

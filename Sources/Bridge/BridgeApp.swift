@@ -68,6 +68,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         termination = source
         EditMenu.install()
         if MoveToApplications.offerIfNeeded() { return }
+        UsagePing.shared.start()
         // Nothing to show in the menu bar yet, so start where repositories can be added.
         if store.repos.isEmpty { MainWindow.shared.show(store) }
     }

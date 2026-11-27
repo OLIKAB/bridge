@@ -6,6 +6,8 @@
 
 <p align="center"><a href="LICENSE"><img src="https://img.shields.io/github/license/OLIKAB/bridge" alt="License: MIT"></a></p>
 
+<p align="center"><img src="docs/demo.gif" width="640" alt="Bridge's panel: Claude writes the commit message, the change is committed and pushed, and the dev server starts"></p>
+
 ## What it does
 
 **Repos.** Every git repository you work in, with what's going on in each: local changes, commits to push or pull, a running dev server, an agent session. Commit, pull and push from the panel, have your coding agent write the commit message, start the project's dev server in the background, or open the agent in your terminal. A main window adds changes, history and diffs.
@@ -26,6 +28,8 @@ It shells out to `git` and your agent's CLI, so your own config, keys, hooks and
 Download the latest `Bridge-<version>.dmg` from [Releases](../../releases), open it and drag Bridge to Applications. Bridge updates itself: when a new version is out, the panel offers Update.
 
 Requires macOS 14 or later, on Apple Silicon or Intel.
+
+Bridge sends one anonymous ping a day so we can count how many copies are in use: a random install id, Bridge's version, the macOS version and whether the Mac is Apple Silicon or Intel. Nothing about you, your repositories or your tools, and no IP address is stored. Turn it off in Settings › Send anonymous usage count. The endpoint's code is in [`telemetry/`](telemetry).
 
 ## Build from source
 

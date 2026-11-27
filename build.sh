@@ -8,10 +8,14 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-VERSION="0.3.0"
+VERSION="1.0.0"
 
 # The GitHub repository whose releases Bridge checks for updates (written into its Info.plist).
 UPDATE_REPO="${UPDATE_REPO:-OLIKAB/bridge}"
+
+# Where Bridge sends its one anonymous ping a day (UsagePing.swift; the endpoint is in telemetry/).
+# USAGE_PING_URL= (empty) sends nothing and hides the switch in Settings, e.g. for a fork's builds.
+USAGE_PING_URL="${USAGE_PING_URL-https://bridge-usage.olikab.workers.dev/ping}"
 
 MODE=""
 RELEASE=0
@@ -54,6 +58,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>LSUIElement</key><true/>
     <key>UpdateRepository</key><string>${UPDATE_REPO}</string>
+    <key>UsagePingURL</key><string>${USAGE_PING_URL}</string>
     <key>NSAppleEventsUsageDescription</key><string>Bridge opens tabs in your terminal and runs commands there.</string>
     <key>NSHumanReadableCopyright</key><string>© 2026 OLIKAB. MIT License.</string>
 </dict>
@@ -137,6 +142,13 @@ if [[ "$MODE" == "--dist" ]]; then
         ln -s /Applications "$STAGING/Applications"
         hdiutil create -quiet -volname "Bridge" -srcfolder "$STAGING" -fs HFS+ -format UDZO "$DMG"
         rm -rf "$STAGING"
+    fi
+    # The disk image is what's downloaded, so it's signed, notarized and stapled too: Gatekeeper then
+    # checks it before it's even opened, instead of only the app once it's been copied out.
+    if [[ -n "${NOTARY_PROFILE:-}" ]]; then
+        codesign --force --sign "$IDENTITY" --timestamp "$DMG"
+        xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+        xcrun stapler staple "$DMG"
     fi
     echo "Created: $DMG ($(du -h "$DMG" | cut -f1))"
 
