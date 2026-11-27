@@ -294,7 +294,9 @@ struct BackgroundClaudeForm: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(verbatim: repo.displayName).font(.headline)
-            TextField("What should Claude do? A prompt or a skill like /init", text: $prompt, axis: .vertical)
+            // A short question, like the other fields' placeholders; that a skill (/init) works too is
+            // something people find by typing a slash, as in Claude Code itself.
+            TextField("What should Claude do?", text: $prompt, axis: .vertical)
                 .lineLimit(3...10)
                 .focused($focused)
                 .onSubmit(start)

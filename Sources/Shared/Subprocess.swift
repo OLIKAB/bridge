@@ -94,8 +94,12 @@ private final class PipeReader: @unchecked Sendable {
     }
 
     /// Once the process has exited: what it wrote, waiting until `deadline` for the last of it.
+    /// The pipe is closed then, rather than when the handle happens to be freed: with many commands
+    /// at once, pipes waiting to be freed added up to thousands of open files.
     func collected(by deadline: DispatchTime) -> Data {
-        if finished.wait(timeout: deadline) == .timedOut { stop() }
+        // Only once the end was read: after a timeout a read may still be under way, and reading a
+        // closed handle raises.
+        if finished.wait(timeout: deadline) == .timedOut { stop() } else { try? handle.close() }
         lock.lock()
         defer { lock.unlock() }
         return data

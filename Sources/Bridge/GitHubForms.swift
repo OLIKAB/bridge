@@ -206,20 +206,31 @@ struct CloneRepositoryForm: View {
             if let host {
                 HostedRepoList(store: store, account: HostAccount.shared(for: host), selected: $selected, focus: $focus, clone: clone)
                     .id(host.id)
-            } else {
-                TextField("https://github.com/owner/repo or owner/repo", text: $url)
-                    .onSubmit(clone)
-                    .focused($focus, equals: "url")
-                    .panelField()
             }
 
-            LabeledContent("Into") {
-                HStack {
-                    Text(verbatim: destination.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? (folder as NSString).abbreviatingWithTildeInPath)
-                        .lineLimit(1)
-                        .truncationMode(.head)
-                    Spacer()
-                    Button("Change…", action: chooseFolder).controlSize(.small)
+            // A native form like New project's: labels right-aligned in a column, and a field with a short
+            // example rather than a sentence of instructions (the long "https://… or owner/repo" read as
+            // help text, unlike every other field in the app).
+            Form {
+                if host == nil {
+                    // Labelled by hand: a field in the panels' style is a plain one, which a form doesn't label.
+                    // A full URL from any host works too; owner/repo goes to GitHub.
+                    LabeledContent("Repository") {
+                        TextField("Repository", text: $url, prompt: Text(verbatim: "owner/repo"))
+                            .labelsHidden()
+                            .onSubmit(clone)
+                            .focused($focus, equals: "url")
+                            .panelField()
+                    }
+                }
+                LabeledContent("Location") {
+                    HStack {
+                        Text(verbatim: destination.map { ($0 as NSString).abbreviatingWithTildeInPath } ?? (folder as NSString).abbreviatingWithTildeInPath)
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                        Spacer()
+                        Button("Change…", action: chooseFolder).controlSize(.small)
+                    }
                 }
             }
             if let error {
@@ -342,7 +353,9 @@ private struct HostedRepoList: View {
     private var list: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                TextField("Filter your repositories", text: $filter, prompt: Text("Filter, or double-click one to clone it"))
+                // "Filter", like every other list's filter: the double-click is a shortcut beside Clone,
+                // not something a placeholder needs to teach.
+                TextField("Filter your repositories", text: $filter, prompt: Text("Filter"))
                     .focused(focus, equals: "filter")
                     .panelField()
                 if account.isLoadingRepos {

@@ -9,6 +9,9 @@ struct HostedRepo: Identifiable, Hashable {
     let isPrivate: Bool
     let description: String?
     let pushedAt: String?
+    var isFork = false
+    /// Read-only on the host: kept for reference, rarely something to work on.
+    var isArchived = false
 
     var id: String { name }
     /// Everything before the name: the account, organization or group (with its subgroups).
@@ -101,9 +104,10 @@ struct HostCLI: Sendable {
             return GitResult(status: -1, stdout: "", stderr: "The \(host.cliName) isn't installed. Install it, then log in with `\(host.loginCommand)`.")
         }
         let environment = Git.environment.merging(host.environment) { $1 }
-        return await Task.detached {
-            Git.runSync(executable, args, in: directory, environment: environment, timeout: timeout)
-        }.value
+        // Not in a detached task: see `Git.runOffThread`. Long ones (publishing, cloning, the repository
+        // lists) run at once; the quick lookups made for every repository wait their turn.
+        return await Git.runOffThread(executable, args, in: directory, environment: environment, timeout: timeout,
+                                      queue: timeout <= 30 ? Git.hostQueue : nil)
     }
 
     /// Like `run`, but throws the command's own message on failure.
@@ -170,13 +174,14 @@ struct GitHubHost: GitHost {
     func repositories(_ cli: HostCLI) async throws -> [HostedRepo] {
         let output = try await cli.output([
             "api", "--paginate", "user/repos?per_page=100&sort=pushed&affiliation=owner,collaborator,organization_member",
-            "--jq", ".[] | {name: .full_name, isPrivate: .private, description: .description, pushedAt: .pushed_at}",
+            "--jq", ".[] | {name: .full_name, isPrivate: .private, description: .description, pushedAt: .pushed_at, fork: .fork, archived: .archived}",
         ], timeout: 90)
         return output.split(separator: "\n").compactMap { line in
             guard let json = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any],
                   let name = json["name"] as? String else { return nil }
             return HostedRepo(name: name, isPrivate: json["isPrivate"] as? Bool ?? false,
-                              description: json["description"] as? String, pushedAt: json["pushedAt"] as? String)
+                              description: json["description"] as? String, pushedAt: json["pushedAt"] as? String,
+                              isFork: json["fork"] as? Bool ?? false, isArchived: json["archived"] as? Bool ?? false)
         }
     }
 
@@ -261,7 +266,8 @@ struct GitLabHost: GitHost {
         return projects.compactMap { project in
             guard let path = project["path_with_namespace"] as? String else { return nil }
             return HostedRepo(name: path, isPrivate: project["visibility"] as? String != "public",
-                              description: project["description"] as? String, pushedAt: project["last_activity_at"] as? String)
+                              description: project["description"] as? String, pushedAt: project["last_activity_at"] as? String,
+                              isFork: project["forked_from_project"] is [String: Any], isArchived: project["archived"] as? Bool ?? false)
         }
     }
 

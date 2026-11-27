@@ -51,7 +51,7 @@ struct ChangesView: View {
                     if !selected.isEmpty { menu(for: selected) }
                 } primaryAction: { ids in
                     // A double-click opens the file in an editor; Rex and Terminal would only open its folder.
-                    if let first = ids.first, let editor = Editor.installed.first(where: { $0.name != "Finder" && !$0.isTerminal }) {
+                    if let first = ids.first, let editor = Editor.forFiles.first {
                         editor.open(repo.absolutePath(first))
                     }
                 }
@@ -121,7 +121,7 @@ struct ChangesView: View {
         }
         Divider()
         if selected.count == 1, let file = selected.first {
-            ForEach(Editor.installed.filter { $0.name != "Finder" && !$0.isTerminal }) { editor in
+            ForEach(Editor.forFiles) { editor in
                 Button("Open in \(editor.name)") { editor.open(repo.absolutePath(file.path)) }
             }
             Button("Show in Finder") { repo.reveal(file.path) }
@@ -438,8 +438,7 @@ private struct NoSelection: View {
             // Publish, push and pull request are in the top bar already, so only the editor is offered here.
             Placeholder(title: "No local changes", systemImage: "checkmark.circle") {
                 // One button for the first editor and a menu for the rest, rather than a button per app.
-                let editors = Editor.installed.filter { $0.name != "Finder" }
-                if let first = editors.first {
+                if let first = Editor.installed.first(where: { $0.name != "Finder" }) {
                     Menu("Open in \(first.name)") {
                         ForEach(Editor.installed) { editor in
                             Button("Open in \(editor.name)") { editor.open(repo.path) }

@@ -205,9 +205,11 @@ struct SetupCheckRows: View {
                         Button("Save") {
                             Task { identityError = await check.saveIdentity(name: name, email: email) }
                         }
+                        // The regular size of a field's line, not `.small`: small fields beside small buttons
+                        // were the only field line in the app that didn't match the others.
+                        .fieldRowButton(prominent: true)
                         .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || !email.contains("@"))
                     }
-                    .controlSize(.small)
                     if let identityError {
                         Text(identityError).font(.caption).foregroundStyle(.red)
                     }

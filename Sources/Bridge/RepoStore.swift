@@ -210,8 +210,8 @@ final class RepoStore: ObservableObject {
         repos = newRepos.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         // The server's too, so the "hide inactive" filter follows servers starting and stopping.
         repoChanges = repos.flatMap { repo in
-            [repo.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() },
-             repo.server.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }]
+            [repo.objectWillChange.sink { [weak self] _ in self?.repoDidChange() },
+             repo.server.objectWillChange.sink { [weak self] _ in self?.repoDidChange() }]
         }
         for repo in repos {
             repo.onMissing = { [weak self, weak repo] in
@@ -221,6 +221,21 @@ final class RepoStore: ObservableObject {
         }
         UserDefaults.standard.set(repos.map(\.path), forKey: "repositories")
         BackgroundClaude.shared.repoPaths = repos.map(\.path)
+    }
+
+    private var changeScheduled = false
+
+    /// Passes a repository's change on to views of the whole list, at most ten times a second. Passed on
+    /// one by one, dozens of repositories being read at once redrew the panel's whole list, its sorting
+    /// and groups and the menu bar badge, for each property each of them set.
+    private func repoDidChange() {
+        guard !changeScheduled else { return }
+        changeScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            guard let self else { return }
+            changeScheduled = false
+            objectWillChange.send()
+        }
     }
 
     // MARK: Moved folders
@@ -262,7 +277,8 @@ final class RepoStore: ObservableObject {
     func relocate(_ repo: Repository, to newPath: String) {
         guard repos.contains(where: { $0 === repo }) else { return }
         if repos.contains(where: { $0.path == newPath }) {
-            remove(repo)
+            // A second entry for a repository already listed: nothing to undo.
+            remove([repo], undoable: false)
             return
         }
         Repository.moveSettings(from: repo.path, to: newPath)
@@ -294,8 +310,12 @@ final class RepoStore: ObservableObject {
         }
     }
 
+    /// Reads every repository again that hasn't been read in the last half minute, for whatever the file
+    /// watchers missed. Each one read is four git commands, so with dozens of repositories reading them
+    /// all on every opening of the panel kept git busy for seconds at a time; those just read are current.
     func refreshAll() {
-        repos.forEach { $0.refresh() }
+        let recent = Date().addingTimeInterval(-30)
+        repos.filter { ($0.loadedAt ?? .distantPast) < recent }.forEach { $0.refresh() }
     }
 
     func fetchAll(quietly: Bool) async {
@@ -333,11 +353,40 @@ final class RepoStore: ObservableObject {
         return nil
     }
 
+    /// Adds repository roots found by a search (`RepoImport`), all at once, so the list is sorted and
+    /// saved once rather than once per repository. Returns how many were new.
+    @discardableResult
+    func addRoots(_ paths: [String]) -> Int {
+        let known = Set(repos.map(\.path))
+        var seen = Set<String>()
+        let new = paths.filter { !known.contains($0) && seen.insert($0).inserted }
+        if !new.isEmpty { setRepos(repos + new.map(Repository.init)) }
+        return new.count
+    }
+
     func remove(_ repo: Repository) {
-        repo.server.terminate()
-        RepoGroups.shared.forgetRepo(repo.path)
-        setRepos(repos.filter { $0 !== repo })
-        if selectedPath == repo.path { selectedPath = repos.first?.path }
+        remove([repo])
+    }
+
+    /// Takes repositories out of Bridge at once (sorted, saved and pruned once), stopping the servers
+    /// Bridge started in them. Their color, favorite star and place in the order are kept by path, so
+    /// adding one again brings them back. `undoable` offers Undo for a while (`RepoRemoval`), with
+    /// `trashed` saying where folders moved to the Trash went, so Undo can put them back.
+    /// Whatever removed them, they count as seen by the search (`RepoImport.markSeen`), so the hourly
+    /// search doesn't add them back.
+    func remove(_ removed: [Repository], trashed: [String: URL] = [:], undoable: Bool = true) {
+        let paths = Set(removed.map(\.path))
+        guard !paths.isEmpty else { return }
+        if undoable {
+            RepoRemoval.shared.record(removed.map(\.path), trashed: trashed,
+                                      groups: RepoGroups.shared.snapshot(ofRepos: paths),
+                                      wasSelected: selectedPath.flatMap { paths.contains($0) ? $0 : nil })
+        }
+        for repo in removed { repo.server.terminate() }
+        RepoGroups.shared.forgetRepos(paths)
+        RepoImport.shared.markSeen(paths: paths)
+        setRepos(repos.filter { !paths.contains($0.path) })
+        if let selectedPath, paths.contains(selectedPath) { self.selectedPath = repos.first?.path }
     }
 
     /// Finds git repositories up to three levels below `folder` and adds them all.
@@ -373,12 +422,6 @@ final class RepoStore: ObservableObject {
     func addWithPanel() async -> String? {
         guard let path = chooseFolder(message: "Choose a git repository") else { return nil }
         return await add(path)
-    }
-
-    func scanWithPanel() async -> String? {
-        guard let path = chooseFolder(message: "Choose a folder to search for git repositories") else { return nil }
-        let count = await scan(path)
-        return count == 0 ? "No new repositories found in \((path as NSString).lastPathComponent)" : nil
     }
 
     // MARK: New projects
@@ -469,7 +512,8 @@ final class RepoStore: ObservableObject {
     /// Desktop's Clone repository. Runs here rather than in a terminal so it can't stop at a question.
     /// Through the host's command line when it's installed (gh and glab set up a fork's `upstream`
     /// remote too), otherwise plain git for a URL. Returns an error message.
-    func clone(_ repository: String, to path: String, host: (any GitHost)? = nil) async -> String? {
+    /// `listed: false` leaves it out of `cloning`, for clones shown together in one row (`RepoImport`).
+    func clone(_ repository: String, to path: String, host: (any GitHost)? = nil, listed: Bool = true) async -> String? {
         guard !FileManager.default.fileExists(atPath: path) else {
             return "\((path as NSString).abbreviatingWithTildeInPath) already exists"
         }
@@ -479,8 +523,8 @@ final class RepoStore: ObservableObject {
         } catch {
             return error.localizedDescription
         }
-        cloning.append(path)
-        defer { cloning.removeAll { $0 == path } }
+        if listed { cloning.append(path) }
+        defer { if listed { cloning.removeAll { $0 == path } } }
         // A plain URL works without the host's command line; owner/name typed as a URL goes to GitHub, as before.
         let isURL = repository.contains("://") || repository.hasPrefix("git@")
         let host = host ?? (isURL ? GitHosts.host(for: URL(string: repository)) : GitHosts.gitHub)
@@ -504,7 +548,60 @@ final class RepoStore: ObservableObject {
     /// The Trash rather than deleting, so a mistake can be undone in Finder. Returns an error message.
     @discardableResult
     func moveToTrash(_ repo: Repository) async -> String? {
-        let path = repo.path
+        let risks = await Self.trashRisks(at: repo.path)
+
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Move \(repo.name) to the Trash?"
+        alert.informativeText = risks.isEmpty
+            ? "Everything is committed and pushed. The folder goes to the Trash, and the repository on GitHub isn't touched."
+            : "Lost if you empty the Trash:\n• " + risks.joined(separator: "\n• ") + "\n\nThe repository on GitHub isn't touched."
+        alert.alertStyle = risks.isEmpty ? .warning : .critical
+        let trash = alert.addButton(withTitle: risks.isEmpty ? "Move to Trash" : "Move to Trash Anyway")
+        trash.hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        // With something at stake, Return cancels instead of trashing.
+        if !risks.isEmpty {
+            trash.keyEquivalent = ""
+            alert.buttons[1].keyEquivalent = "\r"
+        }
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return self.trash([repo]).failures.first
+    }
+
+    /// Moves the repositories' folders to the Trash and takes the ones that went out of Bridge, with an
+    /// Undo that puts the folders back. Trash first: if that fails, the repository stays in the list and
+    /// its server keeps running. A running server doesn't stop the move (open files move along with
+    /// the folder), and it's stopped by process id, so it's found again after the move. Folders that are
+    /// gone already are only taken out of Bridge. Returns why the ones that didn't go failed.
+    @discardableResult
+    func trash(_ repos: [Repository]) -> (removed: Int, failures: [String]) {
+        var removed: [Repository] = []
+        var trashed: [String: URL] = [:]
+        var failures: [String] = []
+        for repo in repos {
+            guard FileManager.default.fileExists(atPath: repo.path) else {
+                removed.append(repo)
+                continue
+            }
+            var result: NSURL?
+            do {
+                try FileManager.default.trashItem(at: URL(fileURLWithPath: repo.path), resultingItemURL: &result)
+            } catch {
+                failures.append(repos.count == 1 ? error.localizedDescription : "\(repo.name): \(error.localizedDescription)")
+                continue
+            }
+            trashed[repo.path] = result as URL?
+            repo.server.stopExternal()
+            removed.append(repo)
+        }
+        remove(removed, trashed: trashed)
+        return (removed.count, failures)
+    }
+
+    /// What exists only in this folder and would be lost with it: GitHub has what's committed and
+    /// pushed, not changes, unpushed commits, stashes or ignored files like `.env`. Empty when nothing is.
+    nonisolated static func trashRisks(at path: String) async -> [String] {
         async let remotes = Git.run(["remote"], in: path)
         // Spelled out, so settings like status.showUntrackedFiles=no or submodule.*.ignore don't hide anything.
         async let changes = Git.run(["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"], in: path)
@@ -554,35 +651,7 @@ final class RepoStore: ObservableObject {
         } else {
             risks.append("Couldn't check for files not in git")
         }
-
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "Move \(repo.name) to the Trash?"
-        alert.informativeText = risks.isEmpty
-            ? "Everything is committed and pushed. The folder goes to the Trash, and the repository on GitHub isn't touched."
-            : "Lost if you empty the Trash:\n• " + risks.joined(separator: "\n• ") + "\n\nThe repository on GitHub isn't touched."
-        alert.alertStyle = risks.isEmpty ? .warning : .critical
-        let trash = alert.addButton(withTitle: risks.isEmpty ? "Move to Trash" : "Move to Trash Anyway")
-        trash.hasDestructiveAction = true
-        alert.addButton(withTitle: "Cancel")
-        // With something at stake, Return cancels instead of trashing.
-        if !risks.isEmpty {
-            trash.keyEquivalent = ""
-            alert.buttons[1].keyEquivalent = "\r"
-        }
-        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
-
-        // Trash first: if that fails, the repository stays in the list and its server keeps running.
-        // A running server doesn't stop the move (open files move along with the folder), and it's
-        // stopped by process id, so it's found again after the move.
-        do {
-            try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
-        } catch {
-            return error.localizedDescription
-        }
-        repo.server.stopExternal()
-        remove(repo)
-        return nil
+        return risks
     }
 
     /// Uncommitted changes in the repository's other worktrees. Those inside the folder go to the Trash

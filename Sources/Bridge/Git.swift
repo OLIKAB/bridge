@@ -43,12 +43,51 @@ enum Git {
         return path.isEmpty ? nil : path
     }
 
+    /// Local git commands (status, branches, diffs), a few at a time. With nearly a hundred repositories,
+    /// opening the panel started some 350 at once, which held up the machine and everything Bridge was
+    /// waiting on; queued, they finish about as fast and the rest of the app keeps moving.
+    static let localQueue = limitedQueue("Bridge.git", 8)
+
+    /// The git hosts' command lines (`gh pr view` for each repository at launch), a few at a time.
+    static let hostQueue = limitedQueue("Bridge.host", 4)
+
+    private static func limitedQueue(_ name: String, _ limit: Int) -> OperationQueue {
+        let queue = OperationQueue()
+        queue.name = name
+        queue.maxConcurrentOperationCount = limit
+        queue.qualityOfService = .userInitiated
+        return queue
+    }
+
+    /// Commands that talk to a remote, which can take minutes and would hold the local queue's places.
+    private static let networkCommands: Set<String> = ["fetch", "pull", "push", "clone", "ls-remote", "submodule"]
+
     /// Runs git in `directory`. Network commands get a longer timeout.
     static func run(_ args: [String], in directory: String, timeout: TimeInterval = 30) async -> GitResult {
+        let fullArgs = ["-c", "core.quotepath=false", "-c", "color.ui=false"] + args
+        let isNetwork = args.contains { networkCommands.contains($0) }
+        return await runOffThread(executable, fullArgs, in: directory, environment: environment, timeout: timeout,
+                                  queue: isNetwork ? nil : localQueue)
+    }
+
+    /// Blocking work that goes with reading a repository (walking its folders), in the local queue.
+    static func offThread<T>(_ work: @escaping @Sendable () -> T) async -> T {
         await withCheckedContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let fullArgs = ["-c", "core.quotepath=false", "-c", "color.ui=false"] + args
-                continuation.resume(returning: runSync(executable, fullArgs, in: directory, environment: environment, timeout: timeout))
+            localQueue.addOperation { continuation.resume(returning: work()) }
+        }
+    }
+
+    /// Runs a command on a thread of its own, never on Swift's shared pool of threads: a blocking
+    /// process there (`gh pr view` for each of many repositories) leaves no threads for anything else
+    /// the app is waiting on. In `queue` when given, to run only a few at a time.
+    static func runOffThread(_ path: String, _ args: [String], in directory: String, environment: [String: String]?,
+                             timeout: TimeInterval, queue: OperationQueue?) async -> GitResult {
+        await withCheckedContinuation { continuation in
+            let work: @Sendable () -> Void = { continuation.resume(returning: runSync(path, args, in: directory, environment: environment, timeout: timeout)) }
+            if let queue {
+                queue.addOperation(work)
+            } else {
+                DispatchQueue.global(qos: .userInitiated).async(execute: work)
             }
         }
     }

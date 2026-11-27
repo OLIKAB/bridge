@@ -6,7 +6,9 @@ public enum DevWorkspace {
     /// Opens a terminal in the project with the coding agent running. A script file instead of scripting
     /// the terminal, so Terminal needs no Automation permission. A `prompt` such as `/monday` is sent
     /// as the agent's first message, which runs a skill just like typing it.
+    /// When the agent was set to open in an editor (`AgentEditors.current`), it goes there instead.
     public static func openAgentInTerminal(_ path: String, prompt: String? = nil) {
+        if let editor = AgentEditors.current { return editor.open(folder: path, prompt: prompt) }
         // One file per prompt, so opening two in a row doesn't overwrite the first before the terminal reads it.
         let suffix = prompt.map { "-" + $0.unicodeScalars.filter(CharacterSet.alphanumerics.contains).map(String.init).joined().prefix(40) } ?? ""
         runInTerminal(agentCommand(prompt: prompt), in: path, kind: "\(CodingAgents.current.commandName)\(suffix)")
@@ -33,12 +35,12 @@ public enum DevWorkspace {
     public static let rexSplitKey = "rexSplit"
 
     /// Opens the terminal in a folder (or a file's folder), the way that terminal does it best
-    /// (`TerminalApp.openShell`).
-    public static func openTerminal(_ path: String) {
+    /// (`TerminalApp.openShell`). `terminal` is one picked from an "Open in" menu; otherwise Bridge's own.
+    public static func openTerminal(_ path: String, in terminal: (any TerminalApp)? = nil) {
         var isFolder: ObjCBool = false
         FileManager.default.fileExists(atPath: path, isDirectory: &isFolder)
         let folder = isFolder.boolValue ? path : (path as NSString).deletingLastPathComponent
-        Terminals.current?.openShell(in: folder)
+        (terminal ?? Terminals.current)?.openShell(in: folder)
     }
 
     /// Runs a command in a new terminal tab or window, for scripts that need a real terminal (curses

@@ -21,8 +21,28 @@ public enum AgentCapability: Sendable, Hashable {
     case browser
     /// Reports how much of the plan's usage is left.
     case usage
-    /// Can update itself, and Bridge can tell when a newer version exists.
+    /// Bridge can tell when a newer version exists and update it (`CodingAgent.updates`). Only for an
+    /// agent with a documented way to update and one place every release is published: Cursor's CLI
+    /// updates itself and has no such place, and OpenCode's npm package and Homebrew formula disagree
+    /// on what the newest version is (one has the v1 line, the other v2).
     case selfUpdate
+}
+
+/// How a coding agent is kept up to date. How a copy is updated depends on how it was installed, which
+/// Bridge reads from where its command really is: Homebrew (`brew upgrade`), npm, or the agent's own
+/// installer, which the agent's own command updates.
+public struct AgentUpdates: Sendable {
+    /// The npm package every release is published to: the newest version for a copy not from Homebrew,
+    /// and what `npm install -g` updates a copy installed with npm.
+    public let npmPackage: String
+    /// Arguments of the agent's documented command that updates itself (`claude update`), used for
+    /// any copy not from Homebrew; nil when it has none, so only a copy from npm or Homebrew is updated.
+    public let selfUpdateArguments: [String]?
+
+    public init(npmPackage: String, selfUpdateArguments: [String]?) {
+        self.npmPackage = npmPackage
+        self.selfUpdateArguments = selfUpdateArguments
+    }
 }
 
 /// How the agent is started, from the panel's switches.
@@ -88,6 +108,9 @@ public protocol CodingAgent: Sendable {
     func availableModels() -> [AgentModel]?
     /// Makes `model` the one the user's config picks; nil leaves it to the agent's default.
     func useModel(_ model: String?) throws
+
+    /// Where its releases are and how it updates itself; nil without `.selfUpdate`.
+    var updates: AgentUpdates? { get }
 }
 
 /// A model an agent offers, as its config names it and as people do.
@@ -122,6 +145,8 @@ extension CodingAgent {
     public func configuredModel() -> String? { nil }
     public func availableModels() -> [AgentModel]? { nil }
     public func useModel(_ model: String?) throws {}
+
+    public var updates: AgentUpdates? { nil }
 
     /// Whether a failed run's output says the login is missing or no longer works. Asking up front
     /// isn't enough: `codex login status` says "Logged in" with a token that can no longer be refreshed,
@@ -181,6 +206,7 @@ public struct ClaudeCode: CodingAgent {
     /// The native installer puts claude in ~/.local/bin, which the terminal's PATH may not have yet.
     public let installCommand: String? = "curl -fsSL https://claude.ai/install.sh | bash && ~/.local/bin/claude auth login"
     public let installURL: URL? = URL(string: "https://claude.com/product/claude-code")
+    public var updates: AgentUpdates? { AgentUpdates(npmPackage: "@anthropic-ai/claude-code", selfUpdateArguments: ["update"]) }
 
     /// `claude auth status` prints JSON with `loggedIn` and `email`.
     public func loginState(executable: String, environment: [String: String]) -> CLILogin {
@@ -214,7 +240,7 @@ public struct Codex: CodingAgent {
     public let shortName = "Codex"
     public let commandName = "codex"
     public var extraSearchPaths: [String] { commonBins }
-    public let capabilities: Set<AgentCapability> = [.initialPrompt, .headless, .readsProject]
+    public let capabilities: Set<AgentCapability> = [.initialPrompt, .headless, .readsProject, .selfUpdate]
     @MainActor public var logo: NSImage { Logo.bundled("openai", fallback: "terminal") }
     @MainActor public var tint: Color { .primary }
 
@@ -239,6 +265,8 @@ public struct Codex: CodingAgent {
     public let loginCommand: String? = "codex logout >/dev/null 2>&1; codex login"
     public let installCommand: String? = "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
     public let installURL: URL? = URL(string: "https://github.com/openai/codex")
+    /// `codex update` ("Update Codex to the latest version" in `codex --help`).
+    public var updates: AgentUpdates? { AgentUpdates(npmPackage: "@openai/codex", selfUpdateArguments: ["update"]) }
 
     /// `codex login status` exits 0 when logged in.
     public func loginState(executable: String, environment: [String: String]) -> CLILogin {
@@ -319,7 +347,7 @@ public struct GeminiCLI: CodingAgent {
     public let shortName = "Gemini"
     public let commandName = "gemini"
     public var extraSearchPaths: [String] { commonBins }
-    public let capabilities: Set<AgentCapability> = [.initialPrompt, .headless, .readsProject]
+    public let capabilities: Set<AgentCapability> = [.initialPrompt, .headless, .readsProject, .selfUpdate]
     @MainActor public var logo: NSImage { Logo.bundled("googlegemini", fallback: "sparkle") }
     @MainActor public var tint: Color { Color(red: 0.26, green: 0.52, blue: 0.96) }
 
@@ -340,6 +368,8 @@ public struct GeminiCLI: CodingAgent {
     public let loginCommand: String? = "gemini"
     public let installCommand: String? = "npm install -g @google/gemini-cli && gemini"
     public let installURL: URL? = URL(string: "https://geminicli.com")
+    /// No command of its own: its docs update it with `npm install -g @google/gemini-cli@latest`.
+    public var updates: AgentUpdates? { AgentUpdates(npmPackage: "@google/gemini-cli", selfUpdateArguments: nil) }
 
     public func loginState(executable: String, environment: [String: String]) -> CLILogin { .unknown }
 }
@@ -389,7 +419,7 @@ public struct CopilotCLI: CodingAgent {
     public let shortName = "Copilot"
     public let commandName = "copilot"
     public var extraSearchPaths: [String] { commonBins }
-    public let capabilities: Set<AgentCapability> = [.initialPrompt, .headless, .readsProject]
+    public let capabilities: Set<AgentCapability> = [.initialPrompt, .headless, .readsProject, .selfUpdate]
     @MainActor public var logo: NSImage { Logo.bundled("githubcopilot", fallback: "person.2") }
     @MainActor public var tint: Color { .primary }
 
@@ -409,6 +439,9 @@ public struct CopilotCLI: CodingAgent {
     public let loginCommand: String? = "copilot login"
     public let installCommand: String? = "curl -fsSL https://gh.io/copilot-install | bash && ~/.local/bin/copilot login"
     public let installURL: URL? = URL(string: "https://github.com/features/copilot/cli")
+    /// `copilot update` (GitHub's CLI command reference). It updates itself too unless turned off, so
+    /// the status line only offers what that hasn't got to yet.
+    public var updates: AgentUpdates? { AgentUpdates(npmPackage: "@github/copilot", selfUpdateArguments: ["update"]) }
 
     public func loginState(executable: String, environment: [String: String]) -> CLILogin { .unknown }
 }

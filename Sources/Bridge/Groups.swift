@@ -82,9 +82,45 @@ final class RepoGroups: ObservableObject {
     }
 
     func forgetRepo(_ path: String) {
-        guard repos[path] != nil else { return }
-        repos[path] = nil
+        forgetRepos([path])
+    }
+
+    /// Takes repositories out of their groups at once, so a cleanup of dozens saves and prunes once.
+    func forgetRepos(_ paths: Set<String>) {
+        let kept = repos.filter { !paths.contains($0.key) }
+        guard kept.count != repos.count else { return }
+        repos = kept
         prune()
+    }
+
+    /// What removing repositories takes away from the groups (their membership, and groups that are
+    /// pruned with their fold state), so an undo can put it back as it was rather than appending
+    /// the groups at the end, unfolded.
+    struct Snapshot {
+        fileprivate let names: [String]
+        fileprivate let repos: [String: String]
+        fileprivate let collapsed: Set<String>
+    }
+
+    func snapshot(ofRepos paths: some Sequence<String>) -> Snapshot {
+        Snapshot(names: names, repos: Dictionary(paths.compactMap { path in repos[path].map { (path, $0) } }, uniquingKeysWith: { first, _ in first }),
+                 collapsed: collapsed)
+    }
+
+    /// Puts back the groups of `paths` (those that did come back) as `snapshot` had them.
+    func restore(_ snapshot: Snapshot, for paths: Set<String>) {
+        let memberships = snapshot.repos.filter { paths.contains($0.key) }
+        let gone = snapshot.names.filter { !names.contains($0) && memberships.values.contains($0) }
+        var restored = names
+        for name in gone {
+            // Just after the nearest group before it that's still there, or first.
+            let index = snapshot.names.firstIndex(of: name) ?? 0
+            let before = snapshot.names[..<index].last(where: restored.contains)
+            restored.insert(name, at: before.flatMap(restored.firstIndex).map { $0 + 1 } ?? 0)
+        }
+        names = restored
+        repos.merge(memberships) { _, before in before }
+        collapsed.formUnion(snapshot.collapsed.filter { key in gone.contains { name in PanelTab.allCases.contains { key == collapseKey(name, $0) } } })
     }
 
     // MARK: Groups

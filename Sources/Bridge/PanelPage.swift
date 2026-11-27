@@ -5,7 +5,9 @@ import SwiftUI
 /// Wi-Fi or Bluetooth in its own panel rather than in a window over it. A popover from a menu bar panel
 /// is a window over a window: it could open off screen, and Esc and focus went to the wrong one.
 enum PanelPage: Hashable {
-    case newProject, clone, setup
+    case newProject, clone, importRepos, cleanUp, settings
+    /// The settings page as a new user first sees it (`SettingsPage.isFirstRun`).
+    case setup
     /// How the repository at `path` is started (`StartCommandEditor`). A page rather than a popover on its
     /// row: a field in a popover is drawn dark, unlike the panel's on its glass, and the form had grown
     /// (apps, scripts, the agent's search) past what a popover holds well.
@@ -15,6 +17,9 @@ enum PanelPage: Hashable {
         switch self {
         case .newProject: "New project"
         case .clone: "Clone repository"
+        case .importRepos: "Find repositories"
+        case .cleanUp: "Clean up repositories"
+        case .settings: "Settings"
         case .setup: "Set up Bridge"
         // The repository's name, as the page is about that one and says so nowhere else.
         case .startCommand(let path): "Start \((path as NSString).lastPathComponent)"

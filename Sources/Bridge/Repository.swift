@@ -271,6 +271,9 @@ final class Repository: ObservableObject, Identifiable {
 
     // MARK: Reading
 
+    /// When it was last read; not published, as nothing shows it.
+    private(set) var loadedAt: Date?
+
     func refresh() {
         // Coalesce: one refresh at a time, and one more if something changed meanwhile.
         guard !isRefreshing else {
@@ -280,6 +283,7 @@ final class Repository: ObservableObject, Identifiable {
         isRefreshing = true
         Task {
             await load()
+            loadedAt = Date()
             isRefreshing = false
             if needsRefresh {
                 needsRefresh = false
@@ -342,15 +346,16 @@ final class Repository: ObservableObject, Identifiable {
         if operation != self.operation { self.operation = operation }
 
         // Detection walks the project's folders (a few levels down for an app in a subfolder), which
-        // can be slow on a big repository or a network disk, so it stays off the main thread.
-        let root = path, folder = startFolder, files = status?.files.map(\.path) ?? []
-        let detected = await Task.detached {
+        // can be slow on a big repository or a network disk, so it stays off the main thread, and off
+        // Swift's shared threads, in git's queue (see `Git.runOffThread`).
+        let root = path, folder = startFolder, files = status?.files.map(\.path) ?? [], numstat = n.stdout
+        let detected = await Git.offThread {
             let start = DevWorkspace.plan(in: root, webOnly: true, folder: folder)
             // An app in a subfolder (nuxt/frontend) has nothing at the root to go by.
             let framework = Framework.detect(projectAt: root) ?? start?.folder.flatMap { Framework.detect(projectAt: root + "/" + $0) }
             return (command: start?.command, folder: start?.folder, build: start?.build, isBuilt: start?.isBuilt ?? true, framework: framework,
-                    stamp: Self.worktreeStamp(path: root, files: files, numstat: n.stdout))
-        }.value
+                    stamp: Self.worktreeStamp(path: root, files: files, numstat: numstat))
+        }
         if detected.command != detectedStartCommand { detectedStartCommand = detected.command }
         if detected.folder != detectedStartFolder { detectedStartFolder = detected.folder }
         if detected.build != detectedBuildCommand { detectedBuildCommand = detected.build }
@@ -700,7 +705,13 @@ final class Repository: ObservableObject, Identifiable {
 
     /// The remote's web page (GitHub, GitLab, …), if its URL can be turned into one.
     func webURL() async -> URL? {
-        guard let remote, var url = try? await git(["remote", "get-url", remote]).trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+        guard let remote, let url = try? await git(["remote", "get-url", remote]) else { return nil }
+        return Self.webPage(forRemoteURL: url)
+    }
+
+    /// The web page for a remote's URL: SSH and git URLs become the https page the host shows.
+    nonisolated static func webPage(forRemoteURL remoteURL: String) -> URL? {
+        var url = remoteURL.trimmingCharacters(in: .whitespacesAndNewlines)
         // git@github.com:owner/repo.git → https://github.com/owner/repo
         if url.hasPrefix("git@"), let colon = url.firstIndex(of: ":") {
             url = "https://" + url[url.index(url.startIndex, offsetBy: 4)..<colon] + "/" + url[url.index(after: colon)...]

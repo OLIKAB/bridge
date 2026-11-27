@@ -142,6 +142,7 @@ public extension View {
     /// for the line's main action, tinted in the accent or `tint` (`prominentButton`).
     func fieldRowButton(prominent: Bool = false, tint: Color? = nil) -> some View {
         buttonStyle(FieldRowButtonStyle(prominent: prominent, tint: tint)).controlSize(.regular)
+            .hiddenWhileFadingIn()
     }
 }
 

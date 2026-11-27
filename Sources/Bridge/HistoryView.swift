@@ -367,7 +367,7 @@ private struct CommitDetail: View {
                 .contextMenu(forSelectionType: String.self) { ids in
                     if let file = files.first(where: { ids.contains($0.id) }) {
                         if file.kind != .deleted {
-                            ForEach(Editor.installed.filter { $0.name != "Finder" && !$0.isTerminal }) { editor in
+                            ForEach(Editor.forFiles) { editor in
                                 Button("Open in \(editor.name)") { editor.open(repo.absolutePath(file.path)) }
                             }
                             Button("Show in Finder") { repo.reveal(file.path) }
@@ -379,7 +379,7 @@ private struct CommitDetail: View {
                     }
                 } primaryAction: { ids in
                     guard let file = files.first(where: { ids.contains($0.id) }), file.kind != .deleted,
-                          let editor = Editor.installed.first(where: { $0.name != "Finder" && !$0.isTerminal }) else { return }
+                          let editor = Editor.forFiles.first else { return }
                     editor.open(repo.absolutePath(file.path))
                 }
                 // Together no wider than the room the window has for this side (`MainLayout.Widths`), and

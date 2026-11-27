@@ -12,14 +12,20 @@ struct MenuPanel: View {
     @ObservedObject private var agent = AgentStatus.shared
     /// For each row's sessions, handed to it as values (see `RepoRow.isExpanded`).
     @ObservedObject private var claude = BackgroundClaude.shared
-    @State private var notice: String?
+    /// What the last action came to, said in the panel's status line (`StatusLine`). Not observed:
+    /// the list doesn't show it.
+    private var notice: String? {
+        get { PanelNotice.shared.message }
+        nonmutating set { PanelNotice.shared.message = newValue }
+    }
+    private var noticeBinding: Binding<String?> {
+        Binding(get: { PanelNotice.shared.message }, set: { PanelNotice.shared.message = $0 })
+    }
     @State private var showNewProject = false
     @State private var showClone = false
     /// A form shown in place of the list, like a page of Control Center, rather than a popover over the
     /// panel. Kept while the panel closes (choosing a folder closes it), so nothing typed is lost.
     @State private var page: PanelPage?
-    /// Which way the content came in last, for its slide: forward into a page, or back to the list.
-    @State private var pageDirection: HorizontalEdge?
     /// Where to scroll the list once it's there, as the panel opens.
     @State private var scrollRequest: ScrollRequest?
     private static let topID = "list-top"
@@ -28,32 +34,54 @@ struct MenuPanel: View {
         case top
         case row(String)
     }
+    /// Groups opened in the last moment (as `RepoGroups.collapsed` keys), whose rows settle in.
+    @State private var justOpened: Set<String> = []
+    @State private var lastCollapsed = RepoGroups.shared.collapsed
     @State private var dropTargeted = false
     @FocusState private var promptFocused: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        // A page is pushed in as a navigation stack pushes one: the list moves out to the left as the
+        // page comes in from the right, side by side, and back the other way. Moved only, never faded:
+        // fields and glass buttons draw black while partly transparent.
+        // The list stays built under a page (`PageStack`), so going back doesn't build it again.
+        PageStack(showsPage: page != nil, showsBoth: pushes > 0) {
+            listPage
+                .offset(x: page == nil ? 0 : -Self.width)
             if let page {
-                PanelPageHeader(title: page.title, back: closePage)
-                PanelDivider()
-                Group {
+                VStack(alignment: .leading, spacing: 0) {
+                    PanelPageHeader(title: page.title, back: closePage)
+                    PanelDivider()
                     switch page {
                     case .newProject: NewProjectForm(store: store, isPage: true, dismiss: closePage)
                     case .clone: CloneRepositoryForm(store: store, isPage: true, dismiss: closePage)
-                    case .setup: SetupPage(done: closePage)
+                    case .importRepos:
+                        ImportRepositoriesForm(store: store, isPage: true) { result in
+                            closePage()
+                            if let result { notice = result }
+                        }
+                    case .cleanUp:
+                        CleanUpRepositoriesForm(store: store, isPage: true) { failure in
+                            closePage()
+                            if let failure { notice = failure }
+                        }
+                    case .settings: SettingsPage(store: store, done: closePage)
+                    case .setup: SettingsPage(store: store, isFirstRun: true, done: closePage)
                     case .startCommand(let path):
                         if let repo = store.repos.first(where: { $0.path == path }) {
                             StartCommandEditor(repo: repo, isPage: true, dismiss: closePage)
                         }
                     }
                 }
-                .slidesIn(from: .trailing)
-            } else {
-                listPage
-                    .slidesIn(from: pageDirection)
+                .transition(.move(edge: .trailing))
+                .id(page)
+                .layoutValue(key: PageStack.IsPage.self, value: true)
             }
         }
-        .frame(width: 460)
+        // What's pushed out stays inside the panel's edges on its way.
+        .clipped()
+        .frame(width: Self.width)
+        .onChange(of: page) { PanelState.shared.showsPage = page != nil }
         // Folders dragged in from Finder are added, as dropping a folder on an app that lists folders
         // does elsewhere; one that isn't a repository is searched for repositories inside it.
         .dropDestination(for: URL.self) { urls, _ in
@@ -81,8 +109,8 @@ struct MenuPanel: View {
                 scrollRequest = .row(path)
             }
             // A new user is shown what Bridge works with first, once.
-            if page == nil, store.repos.isEmpty, !UserDefaults.standard.bool(forKey: SetupPage.shownKey) {
-                UserDefaults.standard.set(true, forKey: SetupPage.shownKey)
+            if page == nil, store.repos.isEmpty, !UserDefaults.standard.bool(forKey: SettingsPage.shownKey) {
+                UserDefaults.standard.set(true, forKey: SettingsPage.shownKey)
                 openPage(.setup)
             }
             // The prompt is the panel's only text field, so typing goes straight into it.
@@ -93,6 +121,23 @@ struct MenuPanel: View {
         .onReceive(PanelState.shared.$tab.dropFirst()) { tab in
             guard tab == .repos, page == nil, expansion.path == nil else { return }
             DispatchQueue.main.async { promptFocused = true }
+        }
+        .onReceive(PanelState.shared.$backRequests.dropFirst()) { _ in
+            if page != nil { closePage() }
+        }
+        .onReceive(groups.$collapsed) { collapsed in
+            let opened = lastCollapsed.subtracting(collapsed)
+            lastCollapsed = collapsed
+            guard !opened.isEmpty else { return }
+            justOpened = opened
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { justOpened = [] }
+        }
+        // What the hourly search added (`RepoImport.addsAutomatically`), said once in the notice line.
+        .onReceive(RepoImport.shared.$addedAutomatically) { names in
+            guard !names.isEmpty else { return }
+            RepoImport.shared.addedAutomatically = []
+            let list = names.prefix(3).joined(separator: ", ") + (names.count > 3 ? " and \(names.count - 3) more" : "")
+            notice = "Added \(list) from your folders."
         }
         .onReceive(PanelState.shared.$requestedPage) { requested in
             guard let requested else { return }
@@ -107,19 +152,59 @@ struct MenuPanel: View {
         }
     }
 
-    private func openPage(_ page: PanelPage) {
-        pageDirection = .trailing
-        self.page = page
+    /// The list and, while one is open, a page in its place, sized to whichever shows. Like `TabStack`:
+    /// the list stays built and is placed outside the window meanwhile, offered the same size, so going
+    /// back only moves it. Building the list again (every row in view) on the way back held the main
+    /// thread up to 700 ms with a long list.
+    /// While a push runs, both are placed in the panel (`showsBoth`), each moved by its own offset or
+    /// transition, and the panel takes the height of the one arriving at once.
+    private struct PageStack: Layout {
+        let showsPage: Bool
+        let showsBoth: Bool
+
+        struct IsPage: LayoutValueKey {
+            static let defaultValue = false
+        }
+
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            subviews.first { $0[IsPage.self] == showsPage }?.sizeThatFits(proposal) ?? .zero
+        }
+
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            for subview in subviews {
+                let isShown = showsBoth || subview[IsPage.self] == showsPage
+                // Well past the panel's right edge, where nothing of it is drawn or clicked.
+                subview.place(at: isShown ? bounds.origin : CGPoint(x: bounds.minX + 4000, y: bounds.minY), proposal: proposal)
+            }
+        }
     }
 
-    /// Back to the list, which slides in from the left, where the page's back arrow pointed. A project
-    /// just created or cloned shows at its top as Setting up / Cloning.
+    private static let width: CGFloat = 460
+    /// Pushes running, so both the list and the page are placed while they move.
+    @State private var pushes = 0
+
+    private func openPage(_ page: PanelPage) {
+        push { self.page = page }
+    }
+
+    /// Back to the list. A project just created or cloned shows at its top as Setting up / Cloning.
     private func closePage() {
-        pageDirection = .leading
-        page = nil
+        push { page = nil }
         promptFocused = true
-        // Only this once: the list shouldn't slide in again whenever the panel is opened later.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { pageDirection = nil }
+    }
+
+    /// Brings the one moving in into the panel first, unanimated, so it isn't seen gliding over from
+    /// where it waits off to the side, then pushes with the system's own spring (`.snappy`). At once
+    /// with Reduce Motion, or while the panel is closed.
+    private func push(_ change: @escaping () -> Void) {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion, NSApp.keyWindow != nil else {
+            change()
+            return
+        }
+        pushes += 1
+        DispatchQueue.main.async {
+            withAnimation(PanelMotion.page, change, completion: { pushes -= 1 })
+        }
     }
 
     private var listPage: some View {
@@ -135,9 +220,9 @@ struct MenuPanel: View {
                         ProgressView().controlSize(.small).frame(width: 24, height: 22)
                     }
                     // Before settings, so settings lines up with the Servers tab's, which has no +.
-                    AddRepositoryMenu(store: store, notice: $notice, showNewProject: $showNewProject, showClone: $showClone,
+                    AddRepositoryMenu(store: store, notice: noticeBinding, showNewProject: $showNewProject, showClone: $showClone,
                                       openPage: openPage)
-                    SettingsMenu(store: store) { openPage(.setup) }
+                    SettingsMenu(store: store) { openPage(.settings) }
                         .padding(.leading, 4)
                 }
             }
@@ -172,28 +257,8 @@ struct MenuPanel: View {
 
             PanelDivider()
 
-            if !store.repos.isEmpty {
-                AgentProblemNotice()
-            }
-
-            // What adding or finding repositories did, with a visible way to dismiss it (a click on
-            // the text alone wasn't something anyone would find).
-            if let notice {
-                HStack(spacing: 6) {
-                    Image(systemName: "info.circle").foregroundStyle(.secondary)
-                    Text(notice)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                    IconButton(systemName: "xmark", help: "Dismiss") { self.notice = nil }
-                }
-                .font(.caption)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .revealsGently()
-                PanelDivider()
-            }
-
+            // What adding, finding or removing repositories did, and a problem with the agent's setup,
+            // are said in the panel's status line (`StatusLine`) rather than in lines of their own here.
             ForEach(store.settingUp, id: \.self) { path in
                 SettingUpRow(path: path) { store.stopWaiting(for: path) }
                 PanelDivider()
@@ -202,6 +267,7 @@ struct MenuPanel: View {
                 SettingUpRow(path: path, verb: "Cloning")
                 PanelDivider()
             }
+            ImportProgressRow()
 
             if store.repos.isEmpty {
                 // Four regular buttons in one line were wider than the panel; the usual first step leads.
@@ -214,14 +280,16 @@ struct MenuPanel: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+                    // Finding what's already on this Mac and on GitHub first: someone new to Bridge
+                    // nearly always has repositories already.
                     HStack {
-                        Button("New project…") { openPage(.newProject) }
+                        Button("Find repositories…") { openPage(.importRepos) }
                             .prominentButton()
-                        Button("Clone…") { openPage(.clone) }
+                        Button("New project…") { openPage(.newProject) }
                     }
                     HStack {
+                        Button("Clone…") { openPage(.clone) }
                         Button("Add repository…") { Task { notice = await store.addWithPanel() } }
-                        Button("Find repositories in folder…") { Task { notice = await store.scanWithPanel() } }
                     }
                     .buttonStyle(.link)
                     .font(.callout)
@@ -244,11 +312,17 @@ struct MenuPanel: View {
                     .frame(maxWidth: .infinity)
                     .padding(24)
                 }
-                MenuPanelList(maxHeight: 560) {
+                MenuPanelList(maxHeight: 560, onOverflow: { ExpandedRepo.shared.overflow = $0 }) {
                     // Inside the scroll view, so a row picked with the arrow keys can be scrolled to.
                     ScrollViewReader { proxy in
                     // A faint inset line between rows and before each group, so a long list is easy to scan.
-                    VStack(spacing: 0) {
+                    // Lazy, so only the rows in view are built: with nearly a hundred repositories, every
+                    // row built made opening the panel take over a second, nearly all of it SwiftUI going
+                    // over each row's buttons and menus when the prompt field took the keyboard. Sized by
+                    // `MenuPanelList` all the same (it asks for the ideal height, which a lazy stack gives
+                    // from the rows it has built). Each row is a child of its own, not wrapped in a stack
+                    // per group, or a group would be built whole.
+                    LazyVStack(spacing: 0) {
                         // Something to scroll back to the top by.
                         Color.clear.frame(height: 0).id(Self.topID)
                         let sections = groups.sections(store.visibleRepos) { groups.group(ofRepo: $0.path) }
@@ -260,22 +334,23 @@ struct MenuPanel: View {
                                 RepoGroupHeader(section: section, store: store)
                             }
                             if section.isOnly || !groups.isCollapsed(section.name, in: .repos) {
-                                // A group opened by a click settles its rows into place.
-                                VStack(spacing: 0) {
                                 ForEach(section.items) { repo in
-                                    if repo.id != section.items.first?.id {
-                                        PanelDivider(subtle: true)
+                                    VStack(spacing: 0) {
+                                        if repo.id != section.items.first?.id {
+                                            PanelDivider(subtle: true)
+                                        }
+                                        RepoRow(repo: repo, store: store, options: rowOptions,
+                                                sessions: claude.sessions(in: repo.path),
+                                                isStartingSession: claude.isStarting(in: repo.path))
+                                            // Press and hold to drag it into another group, or to another
+                                            // place among its color (see `RepoStore.reorderBlocker`).
+                                            .repoDragRow(repo, group: section.name, groupsShown: !section.isOnly, store: store)
                                     }
-                                    RepoRow(repo: repo, store: store, options: rowOptions,
-                                            sessions: claude.sessions(in: repo.path),
-                                            isStartingSession: claude.isStarting(in: repo.path))
-                                        // Press and hold to drag it into another group, or to another
-                                        // place among its color (see `RepoStore.reorderBlocker`).
-                                        .repoDragRow(repo, group: section.name, groupsShown: !section.isOnly, store: store)
-                                        .id(repo.path)
+                                    // A group opened by a click settles its rows into place; rows
+                                    // scrolled into view just show.
+                                    .revealsGently(when: justOpened.contains("\(PanelTab.repos.rawValue):\(section.name ?? "")"))
+                                    .id(repo.path)
                                 }
-                                }
-                                .revealsGently()
                             }
                         }
                     }
@@ -354,7 +429,7 @@ struct MenuPanel: View {
             hasPrompt: store.pendingClaudePrompt != nil && agent.info.can(.initialPrompt),
             withChrome: store.agentWithBrowser && agent.info.can(.browser),
             agent: agent.info,
-            terminalName: agent.terminalName
+            terminalName: agent.agentPlaceName
         )
     }
 }
@@ -426,10 +501,27 @@ final class ExpandedRepo: ObservableObject {
     @Published private(set) var path: String? {
         didSet {
             guard path != oldValue else { return }
-            oldValue.map { row($0).isExpanded = false }
-            path.map { row($0).isExpanded = true }
+            // Opening and folding grow and shrink the row, the rows below sliding along, as an outline
+            // in Finder does, but only while the list reaches well past the panel's height: the panel
+            // then stays the same size and only the scroll view's content changes. With a short list
+            // the panel itself would grow and shrink, and `MenuBarExtra`'s window can't be animated
+            // (see CLAUDE.md), so there the row opens at once as before.
+            withAnimation(animatesHeight ? PanelMotion.disclose : nil) {
+                oldValue.map { row($0).isExpanded = false }
+                path.map { row($0).isExpanded = true }
+            }
         }
     }
+
+    /// How far the list reaches past the panel's height (`MenuPanelList`'s `onOverflow`). Not published:
+    /// only read at the moment a row opens or folds.
+    var overflow: CGFloat = 0
+    var animatesHeight: Bool {
+        overflow > Self.roomToAnimate && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+    /// More than an open row's details and commit field together, so a row folding can't take the
+    /// list below the panel's height mid-animation.
+    private static let roomToAnimate: CGFloat = 400
 
     /// The row picked with ↑/↓ from the prompt field, so the list can be used from the keyboard the way
     /// a list in a Spotlight-like panel is: arrows to pick, Return to act, Esc to back out.
@@ -605,7 +697,8 @@ private struct RepoRow: View {
             .onTapGesture(perform: rowClicked)
 
             if isExpanded {
-                details.revealsGently()
+                // Uncovered by the growing row when it animates; faded in when it opens at once instead.
+                details.revealsGently(when: !ExpandedRepo.shared.animatesHeight).unrollsWithRow()
             }
 
             // Shown open or not: a failed command needs reading.
@@ -667,13 +760,18 @@ private struct RepoRow: View {
                 }
                 // Shown at once rather than with `revealsGently`: the field and the prominent button are
                 // drawn with the system's materials, which went black while their layer faded in and only
-                // took their real colors once it was fully opaque.
+                // took their real colors once it was fully opaque. (Inside revealed content they now wait
+                // until it's opaque, `hiddenWhileFadingIn`, but here they'd only pop in late.)
+                // When the row grows open (`ExpandedRepo`), it unrolls with it, opaque all the way.
+                .unrollsWithRow()
             }
         }
         // The same margin as a server row's. The color stripe is in the title (see `RepoColorStripe`).
         .padding(.leading, 8)
         .padding(.trailing, 6)
         .padding(.vertical, 7)
+        // What opening shows unrolls under the row's edge as it grows, rather than over the rows below.
+        .clipped()
         // On the row rather than the field, so it's heard while the row is folded too.
         .onChange(of: repo.isWritingCommitMessage) { _, writing in
             if !writing { claudeFinished() }
@@ -705,8 +803,7 @@ private struct RepoRow: View {
             // the destructive ones last. The editors are one submenu: a line each made the menu long.
             Button("Open in the Bridge window") { MainWindow.shared.show(store, selecting: repo) }
             Menu("Open in") {
-                Button("Finder") { repo.reveal() }
-                ForEach(Editor.installed.filter { $0.name != "Finder" }) { editor in
+                ForEach(Editor.installed) { editor in
                     Button(editor.name) { editor.open(repo.path) }
                 }
             }
@@ -1299,7 +1396,7 @@ private struct ClaudeComposer: View {
 
     /// Prominent in the agent's color once there's a prompt to send, like the agent buttons in the rows.
     private var sendButton: some View {
-        let help = agentHelp(agent: agent.info.name, terminal: agent.terminalName, in: "/", prompt: store.pendingClaudePrompt, chrome: withChrome)
+        let help = agentHelp(agent: agent.info.name, terminal: agent.agentPlaceName, in: "/", prompt: store.pendingClaudePrompt, chrome: withChrome)
         return Button(action: send) { Image(systemName: "arrow.up").fontWeight(.semibold) }
             .fieldRowButton(prominent: store.pendingClaudePrompt != nil, tint: Agent.current.tint)
             .panelTooltip(help)
@@ -1501,9 +1598,13 @@ struct AddRepositoryMenu: View {
     @Binding var showClone: Bool
     /// In the menu bar panel: the forms open as a page of the panel instead of a popover over it.
     var openPage: ((PanelPage) -> Void)?
+    /// The main window's Find repositories popover; the panel opens it as a page.
+    @State private var showImport = false
+    /// The main window's Clean up repositories popover; the panel opens it as a page.
+    @State private var showCleanUp = false
 
     var body: some View {
-        PanelMenu("plus", help: "New project, clone, or add repositories") {
+        PanelMenu("plus", help: "New project, clone, add or clean up repositories") {
             Button("New project…", systemImage: "sparkles") {
                 if let openPage { openPage(.newProject) } else { showNewProject = true }
             }
@@ -1511,33 +1612,55 @@ struct AddRepositoryMenu: View {
                 if let openPage { openPage(.clone) } else { showClone = true }
             }
             Divider()
+            Button("Find repositories…", systemImage: "magnifyingglass") {
+                if let openPage { openPage(.importRepos) } else { showImport = true }
+            }
             Button("Add repository…", systemImage: "folder.badge.plus") { Task { notice = await store.addWithPanel() } }
-            Button("Find repositories in folder…", systemImage: "magnifyingglass") { Task { notice = await store.scanWithPanel() } }
+            // Beside finding them, as its counterpart: in and out in batches from the same menu.
+            if !store.repos.isEmpty {
+                Divider()
+                Button("Clean up repositories…", systemImage: "minus.circle") {
+                    if let openPage { openPage(.cleanUp) } else { showCleanUp = true }
+                }
+            }
         }
         .panelPopover(isPresented: $showNewProject, arrowEdge: .bottom) {
             NewProjectForm(store: store) { showNewProject = false }
         }
-        // Its own view to anchor to: two popovers on one view don't both open reliably.
+        // Their own views to anchor to: two popovers on one view don't both open reliably.
         .background {
             Color.clear.panelPopover(isPresented: $showClone, arrowEdge: .bottom) {
                 CloneRepositoryForm(store: store) { showClone = false }
             }
         }
+        .overlay {
+            Color.clear.allowsHitTesting(false).panelPopover(isPresented: $showImport, arrowEdge: .bottom) {
+                ImportRepositoriesForm(store: store) { result in
+                    showImport = false
+                    if let result { notice = result }
+                }
+            }
+        }
+        .background {
+            Color.clear.allowsHitTesting(false).panelPopover(isPresented: $showCleanUp, arrowEdge: .bottom) {
+                CleanUpRepositoriesForm(store: store) { failure in
+                    showCleanUp = false
+                    if let failure { notice = failure }
+                }
+            }
+        }
     }
 }
 
-/// The list's order and filters and the app's settings, behind one gear button; in the panel and the
-/// main window (where the order and filters apply to the sidebar). Sorting and filters used to be a
-/// button of their own beside the gear, and it was hard to tell which of two small menus held what;
-/// now they're submenus, and the settings stay one click away at the top level.
+/// What's used often in the Repos tab (fetch, the list's order and filters) behind the gear button, and
+/// Settings…, a page of the panel (`SettingsPage`) with everything else; in the panel and the main
+/// window (where the order and filters apply to the sidebar). The settings were here too, about twenty
+/// lines with the picks hidden in submenus.
 struct SettingsMenu: View {
     @ObservedObject var store: RepoStore
-    /// Opens the setup page (`PanelPage.setup`) in the panel.
-    let openSetup: () -> Void
+    /// Opens the settings page (`PanelPage.settings`) in the panel.
+    let openSettings: () -> Void
     @ObservedObject private var groups = RepoGroups.shared
-    @ObservedObject private var agent = AgentStatus.shared
-    @ObservedObject private var update = AppUpdate.shared
-    @ObservedObject private var usagePing = UsagePing.shared
 
     var body: some View {
         PanelMenu(help: "Settings") {
@@ -1567,33 +1690,8 @@ struct SettingsMenu: View {
                 Toggle("Show in groups", isOn: $groups.showsGroups)
                 Divider()
             }
-            // The tools Bridge works with, as submenus showing the current pick, like Sort by.
-            Menu("Coding agent") {
-                AgentPicker().pickerStyle(.inline).labelsHidden()
-            }
-            if agent.models != nil {
-                Menu("Model") {
-                    ModelPicker().pickerStyle(.inline).labelsHidden()
-                }
-            }
-            Menu("Terminal") {
-                TerminalPicker().pickerStyle(.inline).labelsHidden()
-            }
-            Button("Set up Bridge…", action: openSetup)
-            Divider()
-            Toggle("Fetch automatically every 10 minutes", isOn: $store.autoFetch)
-            if agent.info.can(.skills) {
-                Toggle("Show pinned \(agent.info.name) skills", isOn: $store.showSkills)
-            }
-            Toggle("Global shortcuts \(HotKey.repos.displayName) and \(HotKey.servers.displayName)", isOn: $store.hotKeyOn)
-            Toggle("Launch at login", isOn: $store.launchAtLogin)
-            Toggle("Check for Bridge updates", isOn: $update.isEnabled)
-            Button("Check for Bridge updates now") { update.check(byHand: true) }
-            if UsagePing.endpoint != nil {
-                Toggle("Send anonymous usage count", isOn: $usagePing.isEnabled)
-            }
-            Divider()
-            LicenseMenuItem()
+            Button("Settings…", action: openSettings)
+                .keyboardShortcut(",", modifiers: .command)
             Button("Quit Bridge") { NSApp.terminate(nil) }
         } icon: {
             Image(systemName: "gearshape").foregroundStyle(.secondary)
@@ -1637,8 +1735,18 @@ struct ServerControls: View {
         }
     }
 
+    private var isRunning: Bool { server.state == .running || server.state == .stopping }
+
     @ViewBuilder private func controls(_ command: String) -> some View {
         switch server.state {
+        case .running, .stopping:
+            if server.state == .running, server.url == nil {
+                StartProgressLabel(server: server, showsTime: true)
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            } else {
+                address(server.url, pending: "Stopping…")
+            }
         case .stopped, .exited:
             if case .exited(let code) = server.state, code != 0 {
                 // Bridge already reinstalled once on its own; this is for after the user fixed something, or a cause it missed.
@@ -1652,39 +1760,41 @@ struct ServerControls: View {
                     server.showOutput()
                 }
             }
-            Group {
-                // An app that has to be compiled first gets the build button in play's place, and play once it's built:
-                // the first compile (minutes for Rust or Spring) is then its own step with its own progress.
-                if repo.needsBuild, let build = repo.buildCommand {
-                    IconButton(systemName: "hammer.fill", help: "Build \(repo.detectedStartFolder ?? "the app") first\nIt can start once it's built", hoverTint: .orange) {
-                        server.build(build)
-                    }
-                } else {
-                    IconButton(systemName: "play.fill", help: repo.startsInTerminal ? "Run \(repo.customStart?.command ?? "") in Terminal" : "Start \(repo.customStart == nil ? repo.detectedStartFolder ?? "the app" : "the app") in the background", hoverTint: .green) {
-                        if repo.startsInTerminal { DevWorkspace.runInTerminal(command, in: repo.path) } else { server.start(command) }
-                    }
-                }
-            }
+        }
+        // One button for build, play and stop, outside the switch so it stays the same view as the
+        // server starts and stops, and its symbol turns into the next one (`IconButton`'s `.replace`)
+        // rather than one button being swapped for another: the click is answered at once, while the
+        // app takes its seconds to start.
+        primaryButton(command)
             .contextMenu {
-                if let build = repo.buildCommand, !repo.needsBuild {
-                    Button("Build again") { server.build(build) }
+                if isRunning {
+                    // Output sits behind a right-click, like the log in the Servers tab, to keep the row short.
+                    Button("Show output") { server.showOutput() }
+                } else {
+                    if let build = repo.buildCommand, !repo.needsBuild {
+                        Button("Build again") { server.build(build) }
+                    }
+                    Button("Start command…", action: openEditor)
                 }
-                Button("Start command…", action: openEditor)
             }
             .panelPopover(isPresented: $showEditor, arrowEdge: .bottom) {
                 StartCommandEditor(repo: repo) { showEditor = false }
             }
-        case .running, .stopping:
-            if server.state == .running, server.url == nil {
-                StartProgressLabel(server: server, showsTime: true)
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            } else {
-                address(server.url, pending: "Stopping…")
+    }
+
+    private func primaryButton(_ command: String) -> IconButton {
+        if isRunning {
+            return IconButton(systemName: "stop.fill", help: server.isBuilding ? "Stop the build (right-click to show output)" : "Stop (right-click to show output)", hoverTint: .red) { server.stop() }
+        }
+        // An app that has to be compiled first gets the build button in play's place, and play once it's built:
+        // the first compile (minutes for Rust or Spring) is then its own step with its own progress.
+        if repo.needsBuild, let build = repo.buildCommand {
+            return IconButton(systemName: "hammer.fill", help: "Build \(repo.detectedStartFolder ?? "the app") first\nIt can start once it's built", hoverTint: .orange) {
+                server.build(build)
             }
-            // Output sits behind a right-click, like the log in the Servers tab, to keep the row short.
-            IconButton(systemName: "stop.fill", help: server.isBuilding ? "Stop the build (right-click to show output)" : "Stop (right-click to show output)", hoverTint: .red) { server.stop() }
-                .contextMenu { Button("Show output") { server.showOutput() } }
+        }
+        return IconButton(systemName: "play.fill", help: repo.startsInTerminal ? "Run \(repo.customStart?.command ?? "") in Terminal" : "Start \(repo.customStart == nil ? repo.detectedStartFolder ?? "the app" : "the app") in the background", hoverTint: .green) {
+            if repo.startsInTerminal { DevWorkspace.runInTerminal(command, in: repo.path) } else { server.start(command) }
         }
     }
 

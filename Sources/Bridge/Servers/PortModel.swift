@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Shared
 import SwiftUI
 
@@ -6,6 +7,9 @@ import SwiftUI
 /// were once a separate app's and some names (`notifications`) would mean something else next to the repositories'.
 @MainActor
 final class PortModel: ObservableObject {
+    /// The app's one model, for the Settings page in the Repos tab, which holds the servers' settings too.
+    private(set) static weak var shared: PortModel?
+
     @Published var processes: [ListeningProcess] = []
     @Published var showAll = UserDefaults.standard.bool(forKey: "servers.showAll") {
         didSet { UserDefaults.standard.set(showAll, forKey: "servers.showAll") }
@@ -39,6 +43,25 @@ final class PortModel: ObservableObject {
     @Published var busy: Set<String> = []
     /// Why the last restart, start or stop didn't work.
     @Published var lastError: String?
+
+    /// The newest scan and usage, published to the tab (`processes`, `usageHistory`) only while it shows
+    /// in an open panel, and the moment it comes into view. Published every five seconds with new CPU
+    /// figures, they had the Servers tab redraw every row, 45–90 ms on the main thread each time, while
+    /// the panel was closed or showing Repos, and clicks waiting behind that felt slow.
+    private var latest: [ListeningProcess] = []
+    private var usage: [UsageSample] = []
+    private var visibility: [NSObjectProtocol] = []
+    private var tabChange: AnyCancellable?
+
+    private var isShown: Bool {
+        PanelState.shared.tab == .servers && PanelState.shared.window?.isVisible == true
+    }
+
+    private func publishIfShown() {
+        guard isShown else { return }
+        if processes != latest { processes = latest }
+        if usageHistory.count != usage.count || usageHistory.last?.date != usage.last?.date { usageHistory = usage }
+    }
 
     /// Ids we stopped ourselves, so their disappearance isn't reported as a crash.
     private var expectedGone: Set<String> = []
@@ -119,6 +142,7 @@ final class PortModel: ObservableObject {
     }
 
     init() {
+        Self.shared = self
         if notificationsOn { Notifier.requestPermission() }
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
@@ -126,6 +150,14 @@ final class PortModel: ObservableObject {
         }
         // Lets macOS coalesce wake-ups with other timers to save energy.
         timer?.tolerance = 1
+        // The panel opening takes the keyboard; switching to the tab is the other way it comes into view.
+        visibility.append(NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.publishIfShown() }
+        })
+        tabChange = PanelState.shared.$tab.sink { [weak self] _ in
+            // `tab` is set after its publisher fires.
+            DispatchQueue.main.async { self?.publishIfShown() }
+        }
     }
 
     func refreshByHand() {
@@ -166,17 +198,20 @@ final class PortModel: ObservableObject {
             result.removeAll { expectedGone.contains($0.id) }
             pendingRefresh = true
         }
-        notifyChanges(from: processes, to: result)
+        notifyChanges(from: latest, to: result)
         if hasScanned {
             // Listening since the last scan: the moment a server becomes reachable, which its row marks
             // once. Not on the first scan, where everything is "new".
-            let before = Set(processes.map(\.id))
+            let before = Set(latest.map(\.id))
             let now = Date()
             for process in result where !before.contains(process.id) { startedListening[process.id] = now }
         }
         startedListening = startedListening.filter { Date().timeIntervalSince($0.value) < 10 }
-        processes = result
+        latest = result
         recordUsage(result)
+        // The first scan always, so the tab has something the first time it's built.
+        if !hasScanned { processes = latest }
+        publishIfShown()
         hasScanned = true
         if pendingRefresh {
             pendingRefresh = false
@@ -189,13 +224,13 @@ final class PortModel: ObservableObject {
         // Docker container rows share the backend's pid, so count each pid once.
         var seen = Set<Int32>()
         let unique = dev.filter { seen.insert($0.pid).inserted }
-        usageHistory.append(UsageSample(
+        usage.append(UsageSample(
             date: Date(),
             cpu: unique.compactMap(\.cpu).reduce(0, +),
             memory: unique.compactMap(\.memory).reduce(0, +)
         ))
         let cutoff = Date().addingTimeInterval(-5 * 60)
-        usageHistory.removeAll { $0.date < cutoff }
+        usage.removeAll { $0.date < cutoff }
     }
 
     private func notifyChanges(from old: [ListeningProcess], to new: [ListeningProcess]) {
@@ -258,6 +293,7 @@ final class PortModel: ObservableObject {
         expectedGone.insert(process.id)
         stopCount += 1
         processes.removeAll { $0.id == process.id }
+        latest.removeAll { $0.id == process.id }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self.refresh() }
     }
 

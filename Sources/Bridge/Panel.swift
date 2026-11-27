@@ -66,6 +66,46 @@ final class PanelState: ObservableObject {
         if window?.isVisible != true { MenuBarPanel.toggle() }
     }
 
+    /// Whether the Repos tab shows a page (`PanelPage`) in place of its list.
+    @Published var showsPage = false
+
+    /// Asks the Repos tab to go back from its page to the list (the debug hook's "back").
+    @Published var backRequests = 0
+
+    /// For development only, and off unless `defaults write com.olikab.bridge debugAutomation -bool true`:
+    /// lets a script open and close the panel and its pages, so they can be profiled with xctrace
+    /// without someone clicking along. Post a distributed notification named "com.olikab.bridge.debug"
+    /// whose object is "toggle", "page:<importRepos|cleanUp|clone|newProject|setup>", "page:startCommand:<repository path>", "back", "tab:<repos|servers>", "expand:<repository path>" (opens or folds that row), "notice:<text>" or "notice-clear" (the status line's notice).
+    func installDebugHook() {
+        guard UserDefaults.standard.bool(forKey: "debugAutomation") else { return }
+        DistributedNotificationCenter.default().addObserver(forName: .init("com.olikab.bridge.debug"), object: nil, queue: .main) { note in
+            let command = note.object as? String ?? ""
+            MainActor.assumeIsolated {
+                let state = PanelState.shared
+                switch command {
+                case "toggle": MenuBarPanel.toggle()
+                case "back": state.backRequests += 1
+                case "page:importRepos": state.open(.importRepos)
+                case "page:cleanUp": state.open(.cleanUp)
+                case "page:clone": state.open(.clone)
+                case "page:newProject": state.open(.newProject)
+                case "page:setup": state.open(.setup)
+                case "page:settings": state.open(.settings)
+                case "tab:repos": state.tab = .repos
+                case "tab:servers": state.tab = .servers
+                case _ where command.hasPrefix("expand:"):
+                    ExpandedRepo.shared.toggle(String(command.dropFirst("expand:".count)))
+                case _ where command.hasPrefix("notice:"):
+                    PanelNotice.shared.message = String(command.dropFirst("notice:".count))
+                case "notice-clear": PanelNotice.shared.message = nil
+                case _ where command.hasPrefix("page:startCommand:"):
+                    state.open(.startCommand(path: String(command.dropFirst("page:startCommand:".count))))
+                default: break
+                }
+            }
+        }
+    }
+
     /// A shortcut opens the panel on its tab; pressed again it closes it, and with the other tab showing it switches.
     func shortcut(_ target: PanelTab) {
         if window?.isVisible == true && tab != target {
@@ -88,8 +128,10 @@ extension HotKey {
 
 /// The menu bar panel: repositories or servers, each with its own header.
 struct BridgePanel: View {
-    @ObservedObject var store: RepoStore
-    @ObservedObject var ports: PortModel
+    /// Not observed: the panel only hands them on, and each tab observes its own. Observed here, every
+    /// `git status` and every server scan (each five seconds, with new CPU figures) went over both tabs.
+    let store: RepoStore
+    let ports: PortModel
     @ObservedObject private var state = PanelState.shared
     /// The tabs shown so far. A tab once built stays, hidden while the other shows: building one anew
     /// on every switch (every row, laid out and measured) held the main thread for 70–100 ms, a visible
@@ -98,8 +140,7 @@ struct BridgePanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            AppUpdateBar()
-            ClaudeUpdateBar()
+            StatusLine(store: store)
             TabStack(shown: state.tab) {
                 if built.contains(.repos) || state.tab == .repos {
                     MenuPanel(store: store).tabPage(isShown: state.tab == .repos)
@@ -133,7 +174,9 @@ struct BridgePanel: View {
         .background(PanelWindowReader())
         .onAppear {
             AppUpdate.shared.checkIfDue()
-            if AgentStatus.shared.info.can(.selfUpdate) { ClaudeUpdate.shared.checkIfDue() }
+            // Not gated on `AgentStatus.info`, which is looked up as the panel opens and may still be
+            // the previous agent's: the check itself goes by the agent in use.
+            AgentUpdate.shared.checkIfDue()
         }
     }
 }
@@ -182,7 +225,8 @@ struct TabShortcuts<Content: View>: View {
     @ObservedObject private var state = PanelState.shared
 
     var body: some View {
-        content.disabled(state.tab != tab)
+        // Off too while the Repos tab shows a page: its list stays built under the page (`PageStack`).
+        content.disabled(state.tab != tab || (tab == .repos && state.showsPage))
     }
 }
 

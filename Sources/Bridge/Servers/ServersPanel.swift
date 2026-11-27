@@ -40,11 +40,9 @@ struct ServersPanel: View {
                         ))
                         Toggle("Show in groups", isOn: $groups.showsGroups)
                         Divider()
-                        Toggle("Start servers in the background", isOn: $model.runInBackground)
-                        Divider()
-                        Toggle("Notify about new and stopped servers", isOn: $model.notificationsOn)
-                        Divider()
-                        LicenseMenuItem()
+                        // One settings page for both tabs, in the Repos tab (`SettingsPage`).
+                        Button("Settings…") { PanelState.shared.open(.settings) }
+                            .keyboardShortcut(",", modifiers: .command)
                         Button("Quit Bridge") { NSApp.terminate(nil) }
                     }
                     .padding(.leading, 4)
@@ -563,9 +561,10 @@ struct ProcessRow: View {
             ServerGroupMenu(item: .process(process), showNewGroup: $showNewGroup)
             if let root = process.projectRoot, root != "/" {
                 Divider()
-                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: root)]) }
-                ForEach(Editor.installed.filter { $0.name != "Finder" }) { editor in
-                    Button("Open in \(editor.name)") { editor.open(root) }
+                Menu("Open in") {
+                    ForEach(Editor.installed) { editor in
+                        Button(editor.name) { editor.open(root) }
+                    }
                 }
             }
         }

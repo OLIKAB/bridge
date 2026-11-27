@@ -51,7 +51,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let ports: PortModel
     private var termination: DispatchSourceSignal?
 
+    /// An app started from Finder may have 256 files open; past that, opening anything fails, and SwiftUI
+    /// crashes when it can't open its own images. Bridge runs a few git commands for each of possibly a
+    /// hundred repositories, each with its pipes, so it asks for the most the system allows (capped).
+    private static func raiseOpenFileLimit() {
+        var limit = rlimit()
+        guard getrlimit(RLIMIT_NOFILE, &limit) == 0 else { return }
+        let wanted = min(limit.rlim_max, 8192)
+        guard limit.rlim_cur < wanted else { return }
+        limit.rlim_cur = wanted
+        setrlimit(RLIMIT_NOFILE, &limit)
+    }
+
     override init() {
+        Self.raiseOpenFileLimit()
         store = RepoStore()
         ports = PortModel()
         super.init()
@@ -69,6 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         EditMenu.install()
         if MoveToApplications.offerIfNeeded() { return }
         UsagePing.shared.start()
+        RepoImport.shared.start(store)
+        PanelState.shared.installDebugHook()
         // Nothing to show in the menu bar yet, so start where repositories can be added.
         if store.repos.isEmpty { MainWindow.shared.show(store) }
     }

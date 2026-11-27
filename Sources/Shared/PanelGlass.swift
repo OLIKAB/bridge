@@ -22,7 +22,7 @@ public extension View {
     @ViewBuilder
     func prominentButton(tint: Color? = nil) -> some View {
         if #available(macOS 26, *) {
-            buttonStyle(.glassProminent).tint(tint)
+            buttonStyle(.glassProminent).tint(tint).hiddenWhileFadingIn()
         } else {
             buttonStyle(.borderedProminent).tint(tint)
         }

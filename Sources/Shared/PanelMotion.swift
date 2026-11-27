@@ -10,6 +10,14 @@ import SwiftUI
 public enum PanelMotion {
     /// Something opening or turning after a click: short, so it never holds up the next click.
     public static let reveal = Animation.easeOut(duration: 0.15)
+    /// Something arriving that no click asked for (`arrives`), and a symbol turning into the next one.
+    /// Apple's own `.snappy`, as are `disclose` and `page`: the system's preset for quick changes, not a
+    /// curve of our own. Own curves (0.28–0.35 s) felt sluggish beside the system's panels.
+    public static let arrive = Animation.snappy
+    /// A row opening or folding, its height growing or shrinking with the rows below following.
+    public static let disclose = Animation.snappy
+    /// A page of the panel pushed in or back.
+    public static let page = Animation.snappy
     /// Kept clear above and below every highlight, so two lit rows next to each other (one hovered,
     /// one open) read as two shapes rather than merging into one block.
     public static let highlightGap: CGFloat = 1
@@ -43,14 +51,28 @@ public extension View {
     /// settles from a few points above, so the eye follows where it came from. It's laid out at once,
     /// only drawn in over a moment. Closing is immediate, as a menu's is.
     func revealsGently() -> some View {
-        modifier(Reveal())
+        modifier(Reveal(isOn: true))
     }
 
-    /// A page of the panel coming in, as Control Center's pages do: from the trailing edge when going
-    /// in (a form opened from the list), from the leading edge when going back. Nil: no animation, as
-    /// when the panel opens. Only offset and opacity, so the panel's height isn't animated.
-    func slidesIn(from edge: HorizontalEdge?) -> some View {
-        modifier(SlideIn(edge: edge))
+    /// `revealsGently` only when `isOn` as it appears: for rows of a lazy list, which appear as they're
+    /// scrolled to as well as when a click shows them, and should only settle in for the click.
+    func revealsGently(when isOn: Bool) -> some View {
+        modifier(Reveal(isOn: isOn))
+    }
+
+    /// News arriving on its own rather than opened by a click (the status line's message): like
+    /// `revealsGently`, but it comes down further and a little slower, so a message that turns up
+    /// while the eye is elsewhere in the panel is noticed. The short reveal went by unseen there.
+    func arrives() -> some View {
+        modifier(Reveal(isOn: true, distance: 10, animation: PanelMotion.arrive))
+    }
+
+    /// For what a row's opening shows (`PanelMotion.disclose`): it stands still where it will be and the
+    /// row's edge, clipped (`clipped()` on the row), uncovers it as the row grows, as Finder's outline
+    /// does. Never faded, so a field or glass button in it never draws black, and kept while the row
+    /// folds over it.
+    func unrollsWithRow() -> some View {
+        transition(Unroll())
     }
 
     /// A disclosure chevron pointing right while closed and down while open, turning between them.
@@ -111,17 +133,27 @@ public struct ShimmerText: View {
     }
 }
 
-private struct SlideIn: ViewModifier {
-    let edge: HorizontalEdge?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var shown = false
+extension EnvironmentValues {
+    /// True while the view is inside content that is fading in (`revealsGently`), so controls drawn
+    /// with the system's materials can stay hidden until it's opaque (`hiddenWhileFadingIn`).
+    @Entry var panelIsFadingIn = false
+}
+
+public extension View {
+    /// For a control drawn with the system's materials (a text field, a glass button): hidden while
+    /// the content around it fades in, and there at once when that's done. Those materials draw black
+    /// while their layer is partly transparent, so fading them in flashed them black. `panelField`,
+    /// `fieldRowButton` and `prominentButton` already do this.
+    func hiddenWhileFadingIn() -> some View {
+        modifier(HiddenWhileFadingIn())
+    }
+}
+
+private struct HiddenWhileFadingIn: ViewModifier {
+    @Environment(\.panelIsFadingIn) private var isFadingIn
 
     func body(content: Content) -> some View {
-        let distance: CGFloat = reduceMotion ? 0 : edge == .leading ? -16 : 16
-        content
-            .opacity(shown || edge == nil ? 1 : 0)
-            .offset(x: shown || edge == nil ? 0 : distance)
-            .onAppear { withAnimation(.easeOut(duration: 0.18)) { shown = true } }
+        content.opacity(isFadingIn ? 0 : 1)
     }
 }
 
@@ -141,18 +173,40 @@ extension PanelMotion {
     }
 }
 
+/// Stands still: the row's clipped edge does the uncovering. Half a point of movement between its
+/// phases only so SwiftUI has something to animate, which keeps a removed view until the row has
+/// folded over it (a transition that changes nothing is dropped at once, leaving a blank row shrinking).
+private struct Unroll: Transition {
+    func body(content: Content, phase: TransitionPhase) -> some View {
+        content.offset(y: phase.isIdentity ? 0 : -0.5)
+    }
+}
+
 private struct Reveal: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var shown = PanelMotion.isRevealingInstantly
+    @State private var shown: Bool
+    @State private var settled: Bool
+    private let distance: CGFloat
+    private let animation: Animation
+
+    init(isOn: Bool, distance: CGFloat = 4, animation: Animation = PanelMotion.reveal) {
+        let instantly = PanelMotion.isRevealingInstantly || !isOn
+        _shown = State(initialValue: instantly)
+        _settled = State(initialValue: instantly)
+        self.distance = distance
+        self.animation = animation
+    }
 
     func body(content: Content) -> some View {
         content
+            // Fields and glass buttons in it wait until it's opaque (`hiddenWhileFadingIn`).
+            .environment(\.panelIsFadingIn, !settled)
             .opacity(shown ? 1 : 0)
-            .offset(y: shown || reduceMotion ? 0 : -4)
+            .offset(y: shown || reduceMotion ? 0 : -distance)
             // Only this view's own state changes in the transaction, so nothing around it is animated.
             .onAppear {
                 guard !shown else { return }
-                withAnimation(PanelMotion.reveal) { shown = true }
+                withAnimation(animation) { shown = true } completion: { settled = true }
             }
     }
 }

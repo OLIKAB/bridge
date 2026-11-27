@@ -33,6 +33,11 @@ final class AgentStatus: ObservableObject {
     /// The ids of the agents and terminals found, for the pickers.
     @Published private(set) var installedAgents: Set<String> = []
     @Published private(set) var installedTerminals: [String] = []
+    /// The editors the agent can open in (`AgentEditors.available`), for the same picker.
+    @Published private(set) var agentEditors: [String] = []
+    /// Where the agent opens: the editor picked for it, otherwise the terminal. Agent buttons name this;
+    /// shells, scripts and logging in name `terminalName`.
+    @Published private(set) var agentPlaceName = AgentEditors.current?.name ?? Terminals.current?.name ?? "Terminal"
 
     /// The agent picked in Settings: an agent's id, `CodingAgents.automatic` or `CodingAgents.none`.
     @Published var agentChoice = UserDefaults.standard.string(forKey: CodingAgents.preferenceKey) ?? CodingAgents.automatic {
@@ -63,12 +68,15 @@ final class AgentStatus: ObservableObject {
     func refresh() {
         let noAgent = agentChoice == CodingAgents.none
         Task {
-            let (installed, agents, terminals) = await Task.detached {
+            let (installed, agents, terminals, editors, place) = await Task.detached {
                 let path = Git.environment["PATH"] ?? ""
                 CodingAgents.choose(path: path)
                 let agents = Set(CodingAgents.all.filter { $0.executable(path: path) != nil }.map(\.id))
-                return (Agent.executable != nil, agents, Terminals.installed.map(\.id))
+                let place = AgentEditors.current?.name ?? Terminals.current?.name ?? "Terminal"
+                return (Agent.executable != nil, agents, Terminals.installed.map(\.id), AgentEditors.available.map(\.id), place)
             }.value
+            if editors != agentEditors { agentEditors = editors }
+            if place != agentPlaceName { agentPlaceName = place }
             let info = Self.info(isInstalled: installed && !noAgent)
             if info != self.info { self.info = info }
             if agents != installedAgents { installedAgents = agents }
@@ -294,6 +302,7 @@ struct AgentLoginNotice: View {
                 }
                 .glassButtons()
                 .controlSize(.small)
+                .hiddenWhileFadingIn()
             case .waiting:
                 ProgressView().controlSize(.mini)
                 Text("Log in in \(AgentStatus.shared.terminalName), then come back.")
@@ -303,6 +312,7 @@ struct AgentLoginNotice: View {
                 Button("Try again", action: done)
                     .glassButtons()
                     .controlSize(.small)
+                    .hiddenWhileFadingIn()
             case .loggedIn:
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                 Text("Logged in to \(agent.shortName).")
@@ -353,28 +363,20 @@ struct AgentLoginNotice: View {
     }
 }
 
-/// At the top of the Repos tab when the agent's own setup would make it fail (`AgentStatus.problem`,
-/// checked as the panel opens), with the fix a click or two away, so the user isn't first told by an
-/// error after clicking something.
+/// In the panel's status line (`StatusLine`) when the agent's own setup would make it fail
+/// (`AgentStatus.problem`, checked as the panel opens), with the fix a click or two away, so the user
+/// isn't first told by an error after clicking something.
 struct AgentProblemNotice: View {
-    @ObservedObject var status = AgentStatus.shared
+    let problem: AgentProblem
 
     var body: some View {
-        if let problem = status.shownProblem {
-            let agent = Agent.current
-            Group {
-                switch problem {
-                case .loggedOut:
-                    AgentLoginNotice(message: "\(agent.shortName) isn't logged in.",
-                                     dismiss: status.dismissProblem, done: status.refresh)
-                case let .unavailableModel(configured, available):
-                    AgentModelNotice(configured: configured, available: available)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .revealsGently()
-            PanelDivider()
+        let agent = Agent.current
+        switch problem {
+        case .loggedOut:
+            AgentLoginNotice(message: "\(agent.shortName) isn't logged in.",
+                             dismiss: AgentStatus.shared.dismissProblem, done: AgentStatus.shared.refresh)
+        case let .unavailableModel(configured, available):
+            AgentModelNotice(configured: configured, available: available)
         }
     }
 }
@@ -409,6 +411,7 @@ private struct AgentModelNotice: View {
                 .glassButtons()
                 .controlSize(.small)
                 .fixedSize()
+                .hiddenWhileFadingIn()
                 IconButton(systemName: "xmark", help: "Dismiss") { AgentStatus.shared.dismissProblem() }
             }
         }

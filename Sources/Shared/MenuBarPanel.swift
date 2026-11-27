@@ -83,6 +83,7 @@ private struct FieldFocus: ViewModifier {
                         .allowsHitTesting(false)
                 }
             }
+            .hiddenWhileFadingIn()
     }
 }
 
@@ -109,15 +110,24 @@ private struct PanelBackground: ViewModifier {
 public struct MenuPanelList<Content: View>: View {
     let maxHeight: CGFloat
     let content: Content
+    let onOverflow: ((CGFloat) -> Void)?
 
-    public init(maxHeight: CGFloat, @ViewBuilder content: () -> Content) {
+    /// `onOverflow` hears how far the rows reach past `maxHeight` (negative while they fit): by
+    /// that much the list can grow or shrink inside its scroll view without the panel changing size.
+    public init(maxHeight: CGFloat, onOverflow: ((CGFloat) -> Void)? = nil, @ViewBuilder content: () -> Content) {
         self.maxHeight = maxHeight
+        self.onOverflow = onOverflow
         self.content = content()
     }
 
     public var body: some View {
         CappedHeight(maxHeight: maxHeight) {
-            ScrollView { content }
+            ScrollView {
+                content
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                        onOverflow?(height - maxHeight)
+                    }
+            }
         }
     }
 }
@@ -193,6 +203,8 @@ private final class SizerView: NSView {
         frame.origin.y += max(bottom, 0)
         frame.size.width -= max(left, 0) + max(right, 0)
         frame.size.height -= max(top, 0) + max(bottom, 0)
-        window.setFrame(frame, display: true)
+        // Drawn with the next display cycle rather than at once: `display: true` laid out and drew the
+        // whole panel again on the spot, some 70 ms each time a page came or went in a long list.
+        window.setFrame(frame, display: false)
     }
 }

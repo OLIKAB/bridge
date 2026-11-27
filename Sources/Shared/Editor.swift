@@ -50,12 +50,21 @@ public struct Editor: Identifiable {
         Editor(name: "Android Studio", bundleId: "com.google.android.studio"),
     ]
 
-    /// The installed editors, then the terminal Bridge opens (only that one, since every terminal
-    /// Bridge opens goes there).
+    /// Every app a folder can be opened in, the same list wherever "Open in" shows: Finder, the
+    /// editors and every installed terminal, Bridge's own terminal first among them. Only listing the
+    /// terminal Bridge runs agents in left out the others.
     public static var installed: [Editor] {
         let editors = all.filter { InstalledApps.url(for: $0.bundleId) != nil }
-        let terminal = Terminals.current.map { Editor(name: $0.name, bundleId: $0.bundleId) }
-        return editors + (terminal.map { [$0] } ?? [])
+        let current = Terminals.current?.bundleId
+        let terminals = Terminals.installed
+            .sorted { ($0.bundleId == current ? 0 : 1) < ($1.bundleId == current ? 0 : 1) }
+            .map { Editor(name: $0.name, bundleId: $0.bundleId) }
+        return editors + terminals
+    }
+
+    /// The apps a single file opens in: editors only, as Finder and terminals would only open its folder.
+    public static var forFiles: [Editor] {
+        installed.filter { $0.name != "Finder" && !$0.isTerminal }
     }
 
     public var isTerminal: Bool { Terminals.contains(bundleId: bundleId) }
@@ -66,7 +75,7 @@ public struct Editor: Identifiable {
     }
 
     public func open(_ path: String) {
-        if isTerminal { return DevWorkspace.openTerminal(path) }
+        if isTerminal { return DevWorkspace.openTerminal(path, in: Terminals.all.first { $0.bundleId == bundleId }) }
         guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) else { return }
         NSWorkspace.shared.open([URL(fileURLWithPath: path)], withApplicationAt: appURL, configuration: NSWorkspace.OpenConfiguration())
     }
@@ -90,7 +99,10 @@ public enum EditorMenu {
 
     @MainActor public static func show(for path: String) {
         let menu = NSMenu()
-        for editor in Editor.installed {
+        // A file goes to the editors only; a folder to the whole "Open in" list.
+        var isFolder: ObjCBool = false
+        FileManager.default.fileExists(atPath: path, isDirectory: &isFolder)
+        for editor in isFolder.boolValue ? Editor.installed : Editor.forFiles {
             menu.addItem(Item("Open in \(editor.name)") { editor.open(path) })
         }
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)
@@ -146,7 +158,13 @@ public struct IconButton: View {
                             }
                         }
                 } else {
+                    // A button whose symbol changes with what it does (play to stop as a server starts)
+                    // turns one into the other as macOS's own symbols do, so the click shows it was taken
+                    // while the work behind it takes its time. Scoped to the glyph, in its fixed frame,
+                    // so nothing around it is animated. Reduce Motion makes it a plain crossfade.
                     Image(systemName: systemName)
+                        .contentTransition(.symbolEffect(.replace.downUp.byLayer))
+                        .animation(PanelMotion.arrive, value: systemName)
                 }
             }
                 .foregroundStyle(hovering || isHighlighted ? AnyShapeStyle(hoverTint) : isActive ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))

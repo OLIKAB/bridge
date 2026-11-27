@@ -73,6 +73,7 @@ extension EnvironmentValues {
 struct MainView: View {
     @ObservedObject var store: RepoStore
     @State private var notice: String?
+    @State private var showImport = false
     @AppStorage("showNotes") private var showNotes = false
     /// The sidebar as the user last chose with its button, or nil to follow the window's width
     /// (shown when there's room). Crossing that width hands it back to the automatic choice, like Mail.
@@ -166,8 +167,15 @@ struct MainView: View {
                 } else {
                     Placeholder(title: "No repositories yet", systemImage: "folder.badge.plus") {
                         HStack {
+                            Button("Find repositories…") { showImport = true }
+                                .prominentButton()
+                                .panelPopover(isPresented: $showImport, arrowEdge: .bottom) {
+                                    ImportRepositoriesForm(store: store) { result in
+                                        showImport = false
+                                        notice = result
+                                    }
+                                }
                             Button("Add repository…") { Task { notice = await store.addWithPanel() } }
-                            Button("Find repositories in folder…") { Task { notice = await store.scanWithPanel() } }
                         }
                         if let notice {
                             Text(notice).font(.caption).foregroundStyle(.secondary).padding(.top, 4)
@@ -258,7 +266,7 @@ private struct TopBar: View {
                 }
                 if agent.info.isInstalled {
                     let chrome = agentWithBrowser && agent.info.can(.browser)
-                    IconButton(image: Agent.current.logo, help: "Open \(agent.info.name)\(chrome ? " with Chrome" : "") in \(agent.terminalName)",
+                    IconButton(image: Agent.current.logo, help: "Open \(agent.info.name)\(chrome ? " with Chrome" : "") in \(agent.agentPlaceName)",
                                hoverTint: Agent.current.tint, badge: chrome ? Logo.chrome : nil) {
                         DevWorkspace.openAgentInTerminal(repo.path)
                     }
@@ -499,7 +507,7 @@ private struct RepoSidebar: View {
                     }
                 }
                 AddRepositoryMenu(store: store, notice: $notice, showNewProject: $showNewProject, showClone: $showClone)
-                SettingsMenu(store: store) { PanelState.shared.open(.setup) }
+                SettingsMenu(store: store) { PanelState.shared.open(.settings) }
                     .padding(.leading, 4)
             }
             .padding(.horizontal, 10)
@@ -508,6 +516,8 @@ private struct RepoSidebar: View {
             ForEach(store.cloning, id: \.self) { path in
                 SettingUpRow(path: path, verb: "Cloning")
             }
+            ImportProgressRow(showsDivider: false)
+            RemovalUndoRow(store: store, showsDivider: false)
 
             if let notice {
                 Text(notice)
@@ -588,14 +598,15 @@ private struct RepoSidebar: View {
                     RepoColorMenu(repo: repo)
                     GroupMenu(current: groups.group(ofRepo: repo.path), set: { groups.setGroup($0, ofRepo: repo.path) }) { newGroupFor = repo.path }
                     Divider()
-                    Button("Show in Finder") { repo.reveal() }
-                    ForEach(Editor.installed.filter { $0.name != "Finder" }) { editor in
-                        Button("Open in \(editor.name)") { editor.open(repo.path) }
+                    Menu("Open in") {
+                        ForEach(Editor.installed) { editor in
+                            Button(editor.name) { editor.open(repo.path) }
+                        }
                     }
                     // Read when the menu opens, so the sidebar doesn't need to observe it.
                     let agent = AgentStatus.shared
                     if agent.info.isInstalled {
-                        Button("Open \(agent.info.name) in \(agent.terminalName)") { DevWorkspace.openAgentInTerminal(repo.path) }
+                        Button("Open \(agent.info.name) in \(agent.agentPlaceName)") { DevWorkspace.openAgentInTerminal(repo.path) }
                     }
                     Divider()
                     GitHubMenuItems(repo: repo) { publishing = repo.path }

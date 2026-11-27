@@ -75,7 +75,7 @@ final class AppUpdate: ObservableObject {
         lastCheck = Date()
         Task {
             let latest = await Self.latestRelease()
-            available = latest.flatMap { ClaudeUpdate.isNewer($0.version, than: installed) ? $0 : nil }
+            available = latest.flatMap { AgentUpdate.isNewer($0.version, than: installed) ? $0 : nil }
             if byHand {
                 if let available, available.version == skipped { skipped = nil }
                 if available == nil {
@@ -85,6 +85,12 @@ final class AppUpdate: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Puts a failed install away, so the status line offers the update again and what's below it
+    /// shows. A failure stayed until Try again otherwise, hiding everything of lower priority.
+    func dismissFailure() {
+        if case .failed = phase { phase = .idle }
     }
 
     /// Downloads the release's zip, checks it, and hands over to a script that swaps it in once Bridge
@@ -193,54 +199,3 @@ final class AppUpdate: ObservableObject {
     }
 }
 
-/// A line at the top of the panel while a newer Bridge is out: which one, Update, and an × to skip
-/// that version; while it downloads and installs, what it's doing; and a moment of "up to date" after
-/// a check asked for by hand. Nothing at all otherwise.
-struct AppUpdateBar: View {
-    @ObservedObject private var update = AppUpdate.shared
-
-    var body: some View {
-        if let release = update.offered {
-            line {
-                switch update.phase {
-                case .idle:
-                    Text("Bridge \(release.version) is available").foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Release notes") { NSWorkspace.shared.open(release.page) }
-                        .buttonStyle(.link)
-                    Button(release.archive == nil ? "Download" : "Update") { update.install(release) }
-                        .controlSize(.small)
-                        .prominentButton()
-                    IconButton(systemName: "xmark", help: "Skip this version") { update.skipped = release.version }
-                case .downloading, .installing:
-                    ProgressView().controlSize(.mini)
-                    Text(update.phase == .downloading ? "Downloading Bridge \(release.version)…" : "Installing… Bridge restarts in a moment")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                case let .failed(message):
-                    Text(message).foregroundStyle(.red).lineLimit(1).truncationMode(.middle)
-                    Spacer()
-                    Button("Download") { NSWorkspace.shared.open(release.page) }
-                        .buttonStyle(.link)
-                    Button("Try again") { update.install(release) }
-                        .controlSize(.small)
-                }
-            }
-        } else if update.upToDate {
-            line {
-                Text("Bridge \(update.installed) is the newest version").foregroundStyle(.secondary)
-                Spacer()
-            }
-        }
-    }
-
-    private func line<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 6, content: content)
-                .font(.caption)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-            PanelDivider()
-        }
-    }
-}
